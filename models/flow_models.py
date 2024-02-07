@@ -203,9 +203,12 @@ def build_msflow_model(c, c_feats):
         nodes.append(Ff.InputNode(c_feat, 1, 1, name='input{}'.format(idx)))
     for idx in range(n_inputs):
         nodes.append(Ff.Node(nodes[-n_inputs], Fm.PermuteRandom, {}, name='permute_{}'.format(idx)))
-    nodes.append(Ff.Node([(nodes[-n_inputs+i], 0) for i in range(n_inputs)], FusionCouplingLayer, {'clamp': clamp_alpha}, name='fusion flow'))
+    conditions_fusion = Ff.ConditionNode(c_cond, 1, 1, name='condition_fusion')
+    nodes.append(Ff.Node([(nodes[-n_inputs+i], 0) for i in range(n_inputs)], FusionCouplingLayer, {'clamp': clamp_alpha, }, conditions=conditions_fusion, name='fusion flow'))
+    # nodes.append(Ff.Node([(nodes[-n_inputs+i], 0) for i in range(n_inputs)], FusionCouplingLayer, {'clamp': clamp_alpha}, name='fusion flow'))
     for idx, c_feat in enumerate(c_feats):
         nodes.append(Ff.OutputNode(eval('nodes[-idx-1].out{}'.format(idx)), name='output_{}'.format(idx)))
+    nodes.append(conditions_fusion)
     fusion_flow = Ff.GraphINN(nodes)
 
     return parallel_flows, fusion_flow

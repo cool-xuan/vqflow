@@ -41,6 +41,7 @@ def model_forward(c, extractor, parallel_flows, fusion_flow, inputs, multi_class
 
     semantic_embedding = semantic_encoder(h_list[-1]) # B, C, H, W 
     avg_pool = nn.AdaptiveAvgPool2d((1, 1))
+    # semantic_embedding = semantic_encoder(avg_pool(h_list[-1])) # B, C, H, W 
     feat_meta = meta_controller(avg_pool(h_list[-1]).squeeze(-1).squeeze(-1)) # B, C
     
     weights_bias = weight_generator(feat_meta)
@@ -50,20 +51,22 @@ def model_forward(c, extractor, parallel_flows, fusion_flow, inputs, multi_class
     for idx, (h, parallel_flow, c_cond) in enumerate(zip(h_list[-2::-1], parallel_flows[::-1], c.c_conds)):
         y = pool_layer(h)
         B, _, H, W = y.shape
-        cond = positionalencoding2d(c_cond, H, W).to(c.device).unsqueeze(0).repeat(B, 1, 1, 1)
+        pos_cond = positionalencoding2d(c_cond, H, W).to(c.device).unsqueeze(0).repeat(B, 1, 1, 1)
         for flow in parallel_flow:
             flow.subnet.condition = feat_meta
             flow.subnet.weights_bias = weights_bias
         if c.semantic_cond:
-            if idx > 0 :
-                semantic_embedding = upsamplers[idx-1](semantic_embedding)
-            semantic_cond = condition_adapters[idx](semantic_embedding)
-            cond = torch.cat([cond, semantic_cond], dim=1)
+            _semantic_embedding = upsamplers[idx](semantic_embedding)
+            semantic_cond = condition_adapters[idx](_semantic_embedding)
+            cond = torch.cat([pos_cond, semantic_cond], dim=1)
+            if idx == 0:
+                semantic_cond = condition_adapters[-1](_semantic_embedding)
+                _cond = torch.cat([pos_cond, semantic_cond], dim=1)
         z, jac = parallel_flow(y, [cond, ])
         z_list.append(z)
         parallel_jac_list.append(jac)
 
-    z_list, fuse_jac = fusion_flow(z_list[::-1])
+    z_list, fuse_jac = fusion_flow(z_list[::-1], _cond)
     jac = fuse_jac + sum(parallel_jac_list)
 
     return z_list, jac
@@ -209,22 +212,38 @@ def train(c):
     ).to(c.device)
 
     meta_controller = nn.Sequential(
-        nn.Linear(2048, c.dim_meta),
+        nn.Linear(2048, c.dim_meta//2),
+        nn.BatchNorm1d(c.dim_meta//2),
+        nn.ReLU(True),
+        nn.Linear(c.dim_meta//2, c.dim_meta),
         nn.BatchNorm1d(c.dim_meta),
         nn.ReLU(True)
     ).to(c.device)
     
     upsamplers = nn.ModuleList([
-        nn.Sequential(
-            nn.ConvTranspose2d(256, 256, 4, 2, 1),
-            nn.BatchNorm2d(256),
-            nn.ReLU(True),
-        ).to(c.device) for _ in c.c_semantic_conds[:-1]
+        # nn.Sequential(
+        #     nn.ConvTranspose2d(256, 256, 4, 2, 1),
+        #     nn.BatchNorm2d(256),
+        #     nn.ReLU(True),
+        # ).to(c.device)
+        nn.Upsample(
+            scale_factor=2**k, mode='bilinear', align_corners=False).to(c.device)
+        for k in range(len(c.c_semantic_conds))
     ])
     
     condition_adapters = nn.ModuleList([
         nn.Conv2d(256, c_semantic_cond, 1, 1, 0).to(c.device) for c_semantic_cond in c.c_semantic_conds
     ])
+    condition_adapters.append(nn.Conv2d(256, c.c_semantic_conds[-1], 1, 1, 0).to(c.device))
+    # condition_adapters = nn.ModuleList([])
+    # for _k in range(len(c.c_semantic_conds)):
+    #     if _k == 0:
+    #         condition_adapters.append(nn.Sequential(
+    #             nn.Conv2d(256, c.c_semantic_conds[_k], 1, 1, 0),
+    #         ).to(c.device))
+    #     else:
+    #         condition_adapters.append(nn.Identity().to(c.device))
+        
     
     weight_generator = nn.Sequential(
             nn.Linear(c.dim_meta, 32),
