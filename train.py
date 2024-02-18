@@ -124,7 +124,7 @@ def train_meta_epoch(c, epoch, loader, extractor, parallel_flows, fusion_flow, p
                 loss = loss - jac
                 loss = loss.mean()
                 if c.quantize_enable:
-                    loss += diff
+                    loss += diff * c.quantize_weight
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(params, 2)
                 optimizer.step()
