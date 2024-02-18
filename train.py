@@ -16,6 +16,8 @@ from post_process import post_process
 from utils import Score_Observer, t2np, positionalencoding2d, save_weights, load_weights
 from evaluations import eval_det_loc
 
+from models.quantize import Quantize
+
 def extract_features(c, extractor, inputs):
     if c.pre_extract:
         h_list = inputs
@@ -38,11 +40,22 @@ def model_forward(c, extractor, parallel_flows, fusion_flow, inputs, multi_class
     upsamplers = getattr(multi_class_adapters, 'upsamplers', None)
     condition_adapters = getattr(multi_class_adapters, 'condition_adapters', None)
     weight_generator = getattr(multi_class_adapters, 'weight_generator', None)
+    quantize_cond = getattr(multi_class_adapters, 'quantize_cond', None)
+    quantize_dynamic = getattr(multi_class_adapters, 'quantize_dynamic', None)
 
     semantic_embedding = semantic_encoder(h_list[-1]) # B, C, H, W 
+    if c.quantize_enable and quantize_cond is not None:
+        semantic_embedding, diff_cond, _ = quantize_cond(semantic_embedding)
+    else:
+        diff_cond = 0.
     avg_pool = nn.AdaptiveAvgPool2d((1, 1))
     # semantic_embedding = semantic_encoder(avg_pool(h_list[-1])) # B, C, H, W 
     feat_meta = meta_controller(avg_pool(h_list[-1]).squeeze(-1).squeeze(-1)) # B, C
+    if c.quantize_enable and quantize_dynamic is not None:
+        feat_meta, diff_dynamic, _ = quantize_dynamic(feat_meta.unsqueeze(-1).unsqueeze(-1))
+        feat_meta = feat_meta.squeeze(-1).squeeze(-1)
+    else:
+        diff_dynamic = 0.
     
     weights_bias = weight_generator(feat_meta)
 
@@ -66,10 +79,12 @@ def model_forward(c, extractor, parallel_flows, fusion_flow, inputs, multi_class
         z_list.append(z)
         parallel_jac_list.append(jac)
 
+    # fusion_flow.module_list[3].subnet_1.cross_convs.condition = feat_meta
+    # fusion_flow.module_list[3].subnet_2.cross_convs.condition = feat_meta
     z_list, fuse_jac = fusion_flow(z_list[::-1], _cond)
     jac = fuse_jac + sum(parallel_jac_list)
-
-    return z_list, jac
+    
+    return z_list, jac, diff_dynamic+diff_cond
 
 def train_meta_epoch(c, epoch, loader, extractor, parallel_flows, fusion_flow, params, optimizer, warmup_scheduler, decay_scheduler, scaler=None, multi_class_adapters=None):
     parallel_flows = [parallel_flow.train() for parallel_flow in parallel_flows]
@@ -88,24 +103,28 @@ def train_meta_epoch(c, epoch, loader, extractor, parallel_flows, fusion_flow, p
             optimizer.zero_grad()
             if scaler:
                 with autocast():
-                    z_list, jac = model_forward(c, extractor, parallel_flows, fusion_flow, inputs, multi_class_adapters)
+                    z_list, jac, diff = model_forward(c, extractor, parallel_flows, fusion_flow, inputs, multi_class_adapters)
                     loss = 0.
                     for z in z_list:
                         loss += 0.5 * torch.sum(z**2, (1, 2, 3))
                     loss = loss - jac
                     loss = loss.mean()
+                    if c.quantize_enable:
+                        loss += diff * c.quantize_weight
                 scaler.scale(loss).backward()
                 scaler.unscale_(optimizer)
                 torch.nn.utils.clip_grad_norm_(params, 2)
                 scaler.step(optimizer)
                 scaler.update()
             else:
-                z_list, jac = model_forward(c, extractor, parallel_flows, fusion_flow, inputs, multi_class_adapters)
+                z_list, jac, diff = model_forward(c, extractor, parallel_flows, fusion_flow, inputs, multi_class_adapters)
                 loss = 0.
                 for z in z_list:
                     loss += 0.5 * torch.sum(z**2, (1, 2, 3))
                 loss = loss - jac
                 loss = loss.mean()
+                if c.quantize_enable:
+                    loss += diff
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(params, 2)
                 optimizer.step()
@@ -144,7 +163,7 @@ def inference_meta_epoch(c, epoch, loader, extractor, parallel_flows, fusion_flo
             gt_label_list.extend(t2np(label))
             gt_mask_list.extend(t2np(mask))
 
-            z_list, jac = model_forward(c, extractor, parallel_flows, fusion_flow, inputs, multi_class_adapters)
+            z_list, jac, diff = model_forward(c, extractor, parallel_flows, fusion_flow, inputs, multi_class_adapters)
 
             loss = 0.
             for lvl, z in enumerate(z_list):
@@ -235,15 +254,6 @@ def train(c):
         nn.Conv2d(256, c_semantic_cond, 1, 1, 0).to(c.device) for c_semantic_cond in c.c_semantic_conds
     ])
     condition_adapters.append(nn.Conv2d(256, c.c_semantic_conds[-1], 1, 1, 0).to(c.device))
-    # condition_adapters = nn.ModuleList([])
-    # for _k in range(len(c.c_semantic_conds)):
-    #     if _k == 0:
-    #         condition_adapters.append(nn.Sequential(
-    #             nn.Conv2d(256, c.c_semantic_conds[_k], 1, 1, 0),
-    #         ).to(c.device))
-    #     else:
-    #         condition_adapters.append(nn.Identity().to(c.device))
-        
     
     weight_generator = nn.Sequential(
             nn.Linear(c.dim_meta, 32),
@@ -256,10 +266,12 @@ def train(c):
             'meta_controller': meta_controller,
             'upsamplers': upsamplers,
             'condition_adapters': condition_adapters, 
-            'weight_generator': weight_generator
+            'weight_generator': weight_generator, 
+            'quantize_cond': Quantize(256, c.k_cond).to(c.device), 
+            'quantize_dynamic': Quantize(c.dim_meta, c.k_dynamic).to(c.device),
         })
+    
     params += multi_class_adapters.parameters()
-        
     optimizer = torch.optim.Adam(params, lr=c.lr)
     if c.amp_enable:
         scaler = GradScaler()
@@ -277,10 +289,36 @@ def train(c):
     if c.mode == 'test':
         start_epoch = load_weights(parallel_flows, fusion_flow, c.eval_ckpt)
         epoch = start_epoch + 1
-        gt_label_list, gt_mask_list, outputs_list, size_list = inference_meta_epoch(c, epoch, test_loader, extractor, parallel_flows, fusion_flow, multi_class_adapters)
+        if c.multi_class:
+            det_aurocs = {}
+            loc_aurocs = {}
+            loc_pro_aucs = {}
+            for k, v in test_loaders.items():
+                gt_label_list, gt_mask_list, outputs_list, size_list = inference_meta_epoch(c, epoch, v, extractor, parallel_flows, fusion_flow, multi_class_adapters)
 
-        anomaly_score, anomaly_score_map_add, anomaly_score_map_mul = post_process(c, size_list, outputs_list)
-        best_det_auroc, best_loc_auroc, best_loc_pro = eval_det_loc(det_auroc_obs, loc_auroc_obs, loc_pro_obs, epoch, gt_label_list, anomaly_score, gt_mask_list, anomaly_score_map_add, anomaly_score_map_mul, c.pro_eval)
+                anomaly_score, anomaly_score_map_add, anomaly_score_map_mul = post_process(c, size_list, outputs_list)
+                
+                print('Class: {}'.format(k), '-'*50)
+                det_auroc, loc_auroc, loc_pro_auc, _, _, _ = \
+                    eval_det_loc(det_auroc_obss[k], loc_auroc_obss[k], loc_pro_obss[k], epoch, gt_label_list, anomaly_score, gt_mask_list, anomaly_score_map_add, anomaly_score_map_mul, c.loc_eval, c.pro_eval)
+                det_aurocs[k] = det_auroc
+                loc_aurocs[k] = loc_auroc
+                loc_pro_aucs[k] = loc_pro_auc
+            print('Multi Classes', '-'*50)
+            best_det_auroc = det_auroc_obs.update(np.mean(list(det_aurocs.values())), epoch)
+            best_loc_auroc = loc_auroc_obs.update(np.mean(list(loc_aurocs.values())), epoch)
+            if pro_eval:
+                best_loc_pro = loc_pro_obs.update(np.mean(list(loc_pro_aucs.values())), epoch)
+            else:
+                best_loc_pro = False
+        else:
+            gt_label_list, gt_mask_list, outputs_list, size_list = inference_meta_epoch(c, epoch, test_loader, extractor, parallel_flows, fusion_flow, multi_class_adapters)
+
+            anomaly_score, anomaly_score_map_add, anomaly_score_map_mul = post_process(c, size_list, outputs_list)
+
+            det_auroc, loc_auroc, loc_pro_auc, \
+                best_det_auroc, best_loc_auroc, best_loc_pro = \
+                    eval_det_loc(det_auroc_obs, loc_auroc_obs, loc_pro_obs, epoch, gt_label_list, anomaly_score, gt_mask_list, anomaly_score_map_add, anomaly_score_map_mul, c.loc_eval, pro_eval)
         
         return
     
@@ -327,7 +365,7 @@ def train(c):
                 
                 print('Class: {}'.format(k), '-'*50)
                 det_auroc, loc_auroc, loc_pro_auc, _, _, _ = \
-                    eval_det_loc(det_auroc_obss[k], loc_auroc_obss[k], loc_pro_obss[k], epoch, gt_label_list, anomaly_score, gt_mask_list, anomaly_score_map_add, anomaly_score_map_mul, pro_eval)
+                    eval_det_loc(det_auroc_obss[k], loc_auroc_obss[k], loc_pro_obss[k], epoch, gt_label_list, anomaly_score, gt_mask_list, anomaly_score_map_add, anomaly_score_map_mul, c.loc_eval, pro_eval)
                 det_aurocs[k] = det_auroc
                 loc_aurocs[k] = loc_auroc
                 loc_pro_aucs[k] = loc_pro_auc
@@ -345,7 +383,7 @@ def train(c):
 
             det_auroc, loc_auroc, loc_pro_auc, \
                 best_det_auroc, best_loc_auroc, best_loc_pro = \
-                    eval_det_loc(det_auroc_obs, loc_auroc_obs, loc_pro_obs, epoch, gt_label_list, anomaly_score, gt_mask_list, anomaly_score_map_add, anomaly_score_map_mul, pro_eval)
+                    eval_det_loc(det_auroc_obs, loc_auroc_obs, loc_pro_obs, epoch, gt_label_list, anomaly_score, gt_mask_list, anomaly_score_map_add, anomaly_score_map_mul, c.loc_eval, pro_eval)
             
             if c.wandb_enable:
                 wandb.log(

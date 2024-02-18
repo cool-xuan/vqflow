@@ -6,17 +6,18 @@ import wandb
 
 from train import train
 
-def init_seeds(seed=0):
+def init_seeds(seed=9826):
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
-    torch.cuda.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
+    torch.backends.cudnn.deterministic = True
 
 def parsing_args(c):
     parser = argparse.ArgumentParser(description='msflow')
     parser.add_argument('--dataset', default='mvtec', type=str, 
                         choices=['mvtec', 'visa'], help='dataset name')
+    parser.add_argument('--input-size', default=512, type=int)
     parser.add_argument('--pre-extract', action='store_true', default=False, 
                         help='extract features or not.')
     parser.add_argument('--mode', default='train', type=str, 
@@ -49,6 +50,8 @@ def parsing_args(c):
                         help='number of flow blocks used in parallel flows.')
     parser.add_argument('--condition-blocks', default=[0, 0, 0], type=int, metavar='L', nargs='+',
                         help='number of flow blocks with dynamic conv.')
+    parser.add_argument('--loc-eval', action='store_true', default=False, 
+                        help='evaluate the loc auc score or not.')
     parser.add_argument('--pro-eval', action='store_true', default=False, 
                         help='evaluate the pro score or not.')
     parser.add_argument('--pro-eval-interval', default=4, type=int, 
@@ -56,10 +59,19 @@ def parsing_args(c):
     
     parser.add_argument('--semantic-cond', action='store_true', default=False, 
                         help='add semantic feature as cond for flow or not.')
-    parser.add_argument('--ratio-dynamic', default=8, type=int, 
+    parser.add_argument('--ratio-dynamic', default=4, type=int, 
                         help='shrunk ratio of dynamic conv.')
     parser.add_argument('--dim-meta', default=512, type=int, 
                         help='dim of dynamic conv.')
+    
+    parser.add_argument('--quantize-enable', action='store_true', default=False, 
+                        help='use quantize or not.')
+    parser.add_argument('--quantize-weight', default=1., type=float, 
+                        help='weight for quantize loss.')
+    parser.add_argument('--k-cond', default=512, type=int,
+                        help='number of clusters for quantize of cond features.')
+    parser.add_argument('--k-dynamic', default=32, type=int,
+                        help='number of clusters for quantize of dynamic features.')
     args = parser.parse_args()
 
     for k, v in vars(args).items():
@@ -78,7 +90,7 @@ def parsing_args(c):
         
     # c.input_size = (256, 256) if c.class_name == 'transistor' and not c.multi_class else (512, 512)
     # c.input_size = (256, 256)
-    c.input_size = (512, 512)
+    c.input_size = (c.input_size, c.input_size)
 
     return c
 

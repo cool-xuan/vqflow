@@ -72,6 +72,7 @@ class subnet_dynamic_conv_ln(nn.Module):
         self.weight_generator = nn.Sequential(
             nn.Linear(dim_meta, self.dim_mid * 2),
             # nn.LayerNorm(self.dim_mid * 2),
+            nn.BatchNorm1d(self.dim_mid * 2),
             nn.ReLU(True),
             nn.Linear(self.dim_mid * 2, (self.dim_mid+1)*self.dim_mid),
         )

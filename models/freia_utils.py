@@ -45,6 +45,73 @@ class FusionNet(nn.Module):
             out = [s+a for s, a in zip(x, out)]
 
         return out
+    
+class FusionDynamicNet(nn.Module):
+
+    def __init__(self,
+                 in_channels_list,
+                 mid_channels=1024, 
+                 dim_meta=512,
+                 add=False, 
+                 condition_dims=None):
+        super().__init__()
+        output_channels = input_channels = sum(in_channels_list)
+        self.condition_dims = condition_dims
+        if condition_dims:
+            input_channels += condition_dims
+        mid_channels = 64
+        self.conv1 = nn.Conv2d(input_channels, mid_channels, 3, 1, 1)
+        self.norm = nn.LayerNorm(mid_channels)
+        self.dim_mid = mid_channels
+        self.weight_generator = nn.Sequential(
+            nn.Linear(dim_meta, 256),
+            nn.BatchNorm1d(256),
+            nn.ReLU(True),
+            nn.Linear(256, (self.dim_mid+1)*self.dim_mid),
+        )
+        self.norm_dynamic = nn.LayerNorm(mid_channels)
+        self.conv2 = nn.Conv2d(mid_channels, output_channels, 3, 1, 1)
+        self.split_channels = in_channels_list
+        self.add = add
+        self.relu = nn.ReLU(True)
+
+    def dynamic_conv(self, x):
+        b = x.shape[0]
+        x = x.reshape(1, -1, x.shape[2], x.shape[3])
+        weights_bias = self.weight_generator(self.condition)
+        weights, bias = weights_bias[:, :self.dim_mid**2], weights_bias[:, self.dim_mid**2:]
+        x = F.conv2d(x,
+                     weights.reshape(b*self.dim_mid, self.dim_mid, 1, 1), 
+                     bias=bias.reshape(b*self.dim_mid),
+                     groups=b)
+        
+        return x.reshape(b, self.dim_mid, x.shape[2], x.shape[3])
+
+    def forward(self, x):
+        mini_size = x[-1].size()[-2:]
+        out = [F.adaptive_avg_pool2d(s, mini_size) for s in x]
+
+        out = torch.cat(out, dim=1)
+        out = self.conv1(out)
+        out = self.norm(out.permute(0, 2, 3, 1)).permute(0, 3, 1, 2)
+        out = self.relu(out)
+        out = self.dynamic_conv(out)
+        out = self.norm_dynamic(out.permute(0, 2, 3, 1)).permute(0, 3, 1, 2)
+        out = self.relu(out)
+        out = self.conv2(out)
+        out = self.relu(out)
+
+        out = torch.split(out, self.split_channels, dim=1)
+        out = [
+            F.interpolate(a, size=s.size()[-2:], mode='bilinear', align_corners=True)
+            for s, a in zip(x, out)
+        ]
+        if self.add:
+            if self.condition_dims:
+                x[-1] = x[-1].split([self.split_channels[-1], self.condition_dims], dim=1)[0]
+            out = [s+a for s, a in zip(x, out)]
+
+        return out
 
 class FusionSTNets(nn.Module):
 
