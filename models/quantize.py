@@ -3,13 +3,14 @@ from torch import nn
 from torch.nn import functional as F
 
 class Quantize(nn.Module):
-    def __init__(self, dim, n_embed, decay=0.99, eps=1e-5):
+    def __init__(self, dim, n_embed, decay=0.99, eps=1e-5, thresh=1e-6):
         super().__init__()
 
         self.dim = dim
         self.n_embed = n_embed
         self.decay = decay
         self.eps = eps
+        self.thresh = thresh
 
         embed = torch.randn(dim, n_embed)
         self.register_buffer("embed", embed)
@@ -52,3 +53,28 @@ class Quantize(nn.Module):
 
     def embed_code(self, embed_id):
         return F.embedding(embed_id, self.embed.transpose(0, 1))
+    
+    def reAssign(self, dist):
+        _embed = self.embed.transpose(0, 1).clone().detach()
+        dist = (dist / dist.sum()).detach()
+
+        neverAssignedLoc = dist < self.thresh
+        totalNeverAssigned = int(neverAssignedLoc.sum())
+        # More than half are never assigned
+        if totalNeverAssigned > self.n_embed // 2:
+            mask = torch.zeros((totalNeverAssigned, ), device=self.embed.device)
+            maskIdx = torch.randperm(len(mask))[self.n_embed // 2:]
+            # Random pick some never assigned loc and drop them.
+            mask[maskIdx] = 1.
+            dist[neverAssignedLoc] = mask
+            # Update
+            neverAssignedLoc = dist < self.thresh
+            totalNeverAssigned = int(neverAssignedLoc.sum())
+        argIdx = torch.argsort(mask, descending=True)[:(self.n_embed - totalNeverAssigned)]
+        mostAssigned = _embed[argIdx]
+        selectedIdx = torch.randperm(len(mostAssigned))[:totalNeverAssigned]
+        _embed.data[neverAssignedLoc] = mostAssigned[selectedIdx]
+
+        self.embed.data.copy_(_embed.transpose(0, 1))
+
+        return

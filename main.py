@@ -75,6 +75,8 @@ def parsing_args(c):
     
     parser.add_argument('--quantize-enable', action='store_true', default=False, 
                         help='use quantize or not.')
+    parser.add_argument('--reassign-quantize', action='store_true', default=False, 
+                        help='reassign quantize or not.')
     parser.add_argument('--quantize-weight', default=1., type=float, 
                         help='weight for quantize loss.')
     parser.add_argument('--k-cond', default=512, type=int,

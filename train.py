@@ -117,6 +117,7 @@ def model_forward(c, extractor, parallel_flows, fusion_flow, inputs, multi_class
                 _cond = torch.cat([pos_cond, semantic_cond], dim=1)
         z, jac = parallel_flow(y, [cond, ])
         mu, sigma = sigma_mu_generators[::-1][idx](feat_meta)
+        # z = z * (sigma.abs() + 1e-8) + mu #! terrible
         z = (z - mu) / torch.sqrt(sigma**2 + 1e-8)
         z_list.append(z)
         parallel_jac_list.append(jac)
@@ -197,6 +198,10 @@ def train_meta_epoch(c, epoch, loader, extractor, parallel_flows, fusion_flow, p
         for i, cond_quantize_distribution in enumerate(epoch_cond_quantize_distributions):
             _cond_quantize_distribution = cond_quantize_distribution / cond_quantize_distribution.sum()
             print('Cond Quantize Distribution {} ({}):'.format(i, len(_cond_quantize_distribution)), ''.join([levels[int(x*7)] for x in _cond_quantize_distribution]))
+        if c.reassign_quantize:
+            multi_class_adapters['quantize_dynamic'].reAssign(epoch_dynamic_quantize_distribution)
+            for i, cond_quantize_distribution in enumerate(epoch_cond_quantize_distributions):
+                multi_class_adapters['quantize_cond'][i].reAssign(cond_quantize_distribution)
         
 
 def inference_meta_epoch(c, epoch, loader, extractor, parallel_flows, fusion_flow, multi_class_adapters=None):
@@ -359,7 +364,7 @@ def train(c):
         compute_op = constant_op
 
     cond_quantizers = nn.ModuleList([
-        Quantize(channel_semantic, c.k_cond * compute_op(k)).to(c.device) for k in range(3)
+        Quantize(channel_semantic, c.k_cond * compute_op(k), thresh=1e-6).to(c.device) for k in range(3)
     ])
     cond_quantizers.append(Quantize(channel_semantic, c.k_cond).to(c.device))
 
@@ -369,6 +374,21 @@ def train(c):
             super(sigma_mu_generator, self).__init__()
             self.sigma = nn.Linear(in_channels, out_channels)
             self.mu = nn.Linear(in_channels, out_channels)
+            # mid_channels = min(in_channels, out_channels)
+            # self.sigma = nn.Sequential(
+            #     nn.Linear(in_channels, mid_channels), 
+            #     # nn.BatchNorm1d(mid_channels),
+            #     nn.ReLU(True),
+            #     nn.Linear(mid_channels, out_channels),
+            #     nn.Sigmoid()
+            # )
+            # self.mu = nn.Sequential(
+            #     nn.Linear(in_channels, mid_channels), 
+            #     # nn.BatchNorm1d(mid_channels),
+            #     nn.ReLU(True),
+            #     nn.Linear(mid_channels, out_channels),
+            #     # nn.Tanh()
+            # )
 
         def forward(self, x):
             sigma = self.sigma(x).unsqueeze(-1).unsqueeze(-1)
@@ -387,7 +407,7 @@ def train(c):
             'weight_generator': weight_generator, 
             # 'quantize_cond': Quantize(256, c.k_cond).to(c.device), 
             'quantize_cond': cond_quantizers, 
-            'quantize_dynamic': Quantize(c.dim_meta, c.k_dynamic).to(c.device),
+            'quantize_dynamic': Quantize(c.dim_meta, c.k_dynamic, thresh=1e-4).to(c.device),
             'sigma_mu_generators': sigma_mu_generators
         })
     
