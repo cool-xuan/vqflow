@@ -387,7 +387,7 @@ def train(c):
             #     # nn.BatchNorm1d(mid_channels),
             #     nn.ReLU(True),
             #     nn.Linear(mid_channels, out_channels),
-            #     # nn.Tanh()
+            #     nn.Tanh()
             # )
 
         def forward(self, x):

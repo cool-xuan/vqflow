@@ -70,7 +70,7 @@ class Quantize(nn.Module):
             # Update
             neverAssignedLoc = dist < self.thresh
             totalNeverAssigned = int(neverAssignedLoc.sum())
-        argIdx = torch.argsort(mask, descending=True)[:(self.n_embed - totalNeverAssigned)]
+        argIdx = torch.argsort(dist, descending=True)[:(self.n_embed - totalNeverAssigned)]
         mostAssigned = _embed[argIdx]
         selectedIdx = torch.randperm(len(mostAssigned))[:totalNeverAssigned]
         _embed.data[neverAssignedLoc] = mostAssigned[selectedIdx]
