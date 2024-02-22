@@ -14,10 +14,10 @@ def build_extractor(c):
 
     output_channels = []
     if 'wide' in c.extractor:
-        for i in range(3):
+        for i in range(4):
             output_channels.append(eval('extractor.layer{}[-1].conv3.out_channels'.format(i+1)))
     else:
-        for i in range(3):
+        for i in range(4):
             output_channels.append(extractor.eval('layer{}'.format(i+1))[-1].conv2.out_channels)
             
     print("Channels of extracted features:", output_channels)

@@ -67,21 +67,22 @@ def load_weights(parallel_flows, fusion_flow, ckpt_path, optimizer=None):
     return state_dict['epoch']
 
 class Score_Observer:
-    def __init__(self, name, total_epochs):
+    def __init__(self, name, total_epochs, verbose=True):
         self.name = name
         self.total_epochs = total_epochs
         self.max_epoch = 0
         self.max_score = 0.0
         self.last_score = 0.0
+        self.verbose = verbose
 
-    def update(self, score, epoch, print_score=True):
+    def update(self, score, epoch):
         self.last = score
         best = False
         if score > self.max_score:
             self.max_score = score
             self.max_epoch = epoch
             best = True
-        if print_score:
+        if self.verbose:
             self.print_score(epoch)
         
         return best
