@@ -81,11 +81,11 @@ def model_forward(c, extractor, parallel_flows, fusion_flow, inputs, multi_class
             if c.quantize_enable and quantize_cond is not None:
                 if c.concat_pos:
                     #! residual quantize
-                    class_embedding = torch.cat([class_embedding, pos_cond], dim=1)
+                    class_pos_embedding = torch.cat([class_embedding, pos_cond], dim=1)
                     # _semantic_embedding = torch.cat([_semantic_embedding, pos_cond], dim=1)
-                    residual = _semantic_embedding - class_embedding
+                    residual = _semantic_embedding - class_pos_embedding
                     _residual, _diff_cond, emb_ind = quantize_cond[idx](residual)
-                    _semantic_embedding = class_embedding + _residual
+                    _semantic_embedding = class_pos_embedding + _residual
                 else:
                     #* indenpendent quantize
                     _semantic_embedding, _diff_cond, emb_ind = quantize_cond[idx](_semantic_embedding)
@@ -103,9 +103,9 @@ def model_forward(c, extractor, parallel_flows, fusion_flow, inputs, multi_class
                         #! residual quantize
                         # class_embedding = torch.cat([class_embedding, pos_cond], dim=1)
                         # _semantic_embedding = torch.cat([_semantic_embedding, pos_cond], dim=1)
-                        residual = _semantic_embedding - class_embedding
+                        residual = _semantic_embedding - class_pos_embedding
                         _residual, _diff_cond, emb_ind = quantize_cond[-1](residual)
-                        _semantic_embedding = class_embedding + _residual
+                        _semantic_embedding = class_pos_embedding + _residual
                     else:
                         #* indenpendent quantize
                         _semantic_embedding, _diff_cond, emb_ind = quantize_cond[-1](_semantic_embedding)
