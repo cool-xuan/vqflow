@@ -59,6 +59,10 @@ def parsing_args(c):
                         help='number of flow blocks used in parallel flows.')
     parser.add_argument('--condition-blocks', default=[0, 0, 0], type=int, metavar='L', nargs='+',
                         help='number of flow blocks with dynamic conv.')
+    parser.add_argument('--c-conds', default=[64, 64, 64], type=int, metavar='L', nargs='+',
+                        help='positional channel number of condition used in parallel flows.')
+    parser.add_argument('--c-semantic-conds', default=[64, 64, 64], type=int, metavar='L', nargs='+',
+                        help='semantic channel number of condition used in parallel flows.')
     parser.add_argument('--loc-eval', action='store_true', default=False, 
                         help='evaluate the loc auc score or not.')
     parser.add_argument('--pro-eval', action='store_true', default=False, 

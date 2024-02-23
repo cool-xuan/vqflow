@@ -198,10 +198,10 @@ def train_meta_epoch(c, epoch, loader, extractor, parallel_flows, fusion_flow, p
         for i, cond_quantize_distribution in enumerate(epoch_cond_quantize_distributions):
             _cond_quantize_distribution = cond_quantize_distribution / cond_quantize_distribution.sum()
             print('Cond Quantize Distribution {} ({}):'.format(i, len(_cond_quantize_distribution)), ''.join([levels[int(x*7)] for x in _cond_quantize_distribution]))
-        if c.reassign_quantize:
-            multi_class_adapters['quantize_dynamic'].reAssign(epoch_dynamic_quantize_distribution)
-            for i, cond_quantize_distribution in enumerate(epoch_cond_quantize_distributions):
-                multi_class_adapters['quantize_cond'][i].reAssign(cond_quantize_distribution)
+    if c.reassign_quantize:
+        multi_class_adapters['quantize_dynamic'].reAssign(epoch_dynamic_quantize_distribution)
+        for i, cond_quantize_distribution in enumerate(epoch_cond_quantize_distributions):
+            multi_class_adapters['quantize_cond'][i].reAssign(cond_quantize_distribution)
         
 
 def inference_meta_epoch(c, epoch, loader, extractor, parallel_flows, fusion_flow, multi_class_adapters=None):
