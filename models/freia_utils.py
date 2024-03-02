@@ -51,7 +51,7 @@ class FusionDynamicNet(nn.Module):
     def __init__(self,
                  in_channels_list,
                  mid_channels=1024, 
-                 dim_meta=512,
+                 dim_cpc=512,
                  add=False, 
                  condition_dims=None):
         super().__init__()
@@ -64,7 +64,7 @@ class FusionDynamicNet(nn.Module):
         self.norm = nn.LayerNorm(mid_channels)
         self.dim_mid = mid_channels
         self.weight_generator = nn.Sequential(
-            nn.Linear(dim_meta, 256),
+            nn.Linear(dim_cpc, 256),
             nn.BatchNorm1d(256),
             nn.ReLU(True),
             nn.Linear(256, (self.dim_mid+1)*self.dim_mid),

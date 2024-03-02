@@ -26,7 +26,7 @@ def parsing_args(c):
     parser = argparse.ArgumentParser(description='msflow')
     parser.add_argument('--dataset', default='mvtec', type=str, 
                         choices=['mvtec', 'visa'], help='dataset name')
-    parser.add_argument('--input-size', default=512, type=int)
+    parser.add_argument('--input-size', default=384, type=int)
     parser.add_argument('--pre-extract', action='store_true', default=False, 
                         help='extract features or not.')
     parser.add_argument('--mode', default='train', type=str, 
@@ -47,9 +47,9 @@ def parsing_args(c):
                         help='learning rate')
     parser.add_argument('--batch-size', default=16, type=int, 
                         help='train batch size')
-    parser.add_argument('--meta-epochs', default=20, type=int,
+    parser.add_argument('--meta-epochs', default=30, type=int,
                         help='number of meta epochs to train')
-    parser.add_argument('--sub-epochs', default=4, type=int,
+    parser.add_argument('--sub-epochs', default=2, type=int,
                         help='number of sub epochs to train')
     parser.add_argument('--extractor', default='wide_resnet50_2', type=str, 
                         help='feature extractor')
@@ -61,6 +61,8 @@ def parsing_args(c):
                         help='number of flow blocks with dynamic conv.')
     parser.add_argument('--c-conds', default=[64, 64, 64], type=int, metavar='L', nargs='+',
                         help='positional channel number of condition used in parallel flows.')
+    parser.add_argument('--c-pos-conds', default=[64, 64, 64], type=int, metavar='L', nargs='+',
+                        help='positional channel number of condition used in parallel flows.')
     parser.add_argument('--c-semantic-conds', default=[64, 64, 64], type=int, metavar='L', nargs='+',
                         help='semantic channel number of condition used in parallel flows.')
     parser.add_argument('--loc-eval', action='store_true', default=False, 
@@ -70,30 +72,31 @@ def parsing_args(c):
     parser.add_argument('--pro-eval-interval', default=4, type=int, 
                         help='interval for pro evaluation.')
     
-    parser.add_argument('--semantic-cond', action='store_true', default=False, 
-                        help='add semantic feature as cond for flow or not.')
     parser.add_argument('--ratio-dynamic', default=4, type=int, 
                         help='shrunk ratio of dynamic conv.')
-    parser.add_argument('--dim-meta', default=512, type=int, 
+    parser.add_argument('--dim-cpc', default=256, type=int, 
                         help='dim of dynamic conv.')
     
     parser.add_argument('--quantize-enable', action='store_true', default=False, 
                         help='use quantize or not.')
+    parser.add_argument('--quantize-type', type=str, default='residual', 
+                        help='residual quantize or naive quantize.')
+    parser.add_argument('--concat-pos', action='store_true', default=False, 
+                        help='concat pe for cgpc quantization or not.')
     parser.add_argument('--reassign-quantize', action='store_true', default=False, 
                         help='reassign quantize or not.')
     parser.add_argument('--quantize-weight', default=1., type=float, 
                         help='weight for quantize loss.')
-    parser.add_argument('--k-cond', default=512, type=int,
+    parser.add_argument('--k-cgpc', default=512, type=int,
                         help='number of clusters for quantize of cond features.')
-    parser.add_argument('--k-dynamic', default=32, type=int,
+    parser.add_argument('--k-cpc', default=32, type=int,
                         help='number of clusters for quantize of dynamic features.')
     
-    parser.add_argument('--concat-dynamic', action='store_true', default=False, 
-                        help='concat dynamic features to cond features or not.')
-    parser.add_argument('--concat-pos', action='store_true', default=False, 
-                        help='concat positional embeddings or not.')
-    parser.add_argument('--compute-op', default='constant', type=str, choices=['constant', 'linear', 'power'], 
-                        help='compute op for quantization clusters number calculation.')
+    parser.add_argument('--mixed-gaussian', action='store_true', default=False, 
+                        help='map to mixed gaussian or not.')
+    parser.add_argument('--concat-cpc', action='store_true', default=False, 
+                        help='concat cpc prototypes as cond features for flows or not.')
+    
     args = parser.parse_args()
 
     for k, v in vars(args).items():
@@ -110,8 +113,6 @@ def parsing_args(c):
         if c.class_names == ['all']:
             setattr(c, 'class_names', VISA_CLASS_NAMES)
         
-    # c.input_size = (256, 256) if c.class_name == 'transistor' and not c.multi_class else (512, 512)
-    # c.input_size = (256, 256)
     c.input_size = (c.input_size, c.input_size)
 
     return c

@@ -26,7 +26,7 @@ def extract_features(c, extractor, inputs):
         
     return h_list
 
-def model_forward(c, extractor, parallel_flows, fusion_flow, inputs, multi_class_adapters=None):
+def model_forward(c, extractor, models, inputs):
     h_list = extract_features(c, extractor, inputs)
     if c.pool_type == 'avg':
         pool_layer = nn.AvgPool2d(3, 2, 1)
@@ -35,108 +35,107 @@ def model_forward(c, extractor, parallel_flows, fusion_flow, inputs, multi_class
     else:
         pool_layer = nn.Identity()
 
-    semantic_encoder = getattr(multi_class_adapters, 'semantic_encoder', None)
-    meta_controller = getattr(multi_class_adapters, 'meta_controller', None)
-    upsamplers = getattr(multi_class_adapters, 'upsamplers', None)
-    condition_adapters = getattr(multi_class_adapters, 'condition_adapters', None)
-    weight_generator = getattr(multi_class_adapters, 'weight_generator', None)
-    quantize_cond = getattr(multi_class_adapters, 'quantize_cond', None)
-    quantize_dynamic = getattr(multi_class_adapters, 'quantize_dynamic', None)
-    sigma_mu_generators = getattr(multi_class_adapters, 'sigma_mu_generators', None)
+    parallel_flows = models['parallel_flows']
+    fusion_flow = models['fusion_flow']
+    semantic_encoder = getattr(models, 'semantic_encoder', None)
+    semantic_mlp = getattr(models, 'semantic_mlp', None)
+    upsamplers = getattr(models, 'upsamplers', None)
+    feature_mlps = getattr(models, 'feature_mlps', None)
+    cgpc_quantizers = getattr(models, 'cgpc_quantizers', None)
+    cpc_quantizer = getattr(models, 'cpc_quantizer', None)
+    sigma_mu_generators = getattr(models, 'sigma_mu_generators', None)
 
-    semantic_embedding = semantic_encoder(h_list[-1]) # B, C, H, W 
-    # semantic_embedding = semantic_encoder(h_list) # B, C, H, W 
-    # if c.quantize_enable and quantize_cond is not None:
-    #     semantic_embedding, diff_cond, _ = quantize_cond(semantic_embedding)
-    # else:
-    #     diff_cond = 0.
+    reduced_semantic_embedding = semantic_encoder(h_list[-1]) # B, C, H, W 
+    h_top = h_list[-1]
     avg_pool = nn.AdaptiveAvgPool2d((1, 1))
-    # semantic_embedding = semantic_encoder(avg_pool(h_list[-1])) # B, C, H, W 
-    feat_meta = meta_controller(avg_pool(h_list[-1]).squeeze(-1).squeeze(-1)) # B, C
-    if c.quantize_enable and quantize_dynamic is not None:
-        feat_meta, diff_dynamic, emb_ind = quantize_dynamic(feat_meta.unsqueeze(-1).unsqueeze(-1))
-        feat_meta = feat_meta.squeeze(-1).squeeze(-1)
+    semantic_vector = semantic_mlp(avg_pool(h_list[-1]).squeeze(-1).squeeze(-1)) # B, C
+    if c.quantize_enable:
+        conceptual_prototype, diff_dynamic, emb_ind = cpc_quantizer(semantic_vector.unsqueeze(-1).unsqueeze(-1))
+        conceptual_prototype = conceptual_prototype.squeeze(-1).squeeze(-1)
     else:
         diff_dynamic = 0.
-    
-    weights_bias = weight_generator(feat_meta)
 
     z_list = []
     parallel_jac_list = []
     diff_cond = 0.
-    dynamic_quantize_distribution = torch.zeros(c.k_dynamic).to(c.device)
-    dynamic_quantize_distribution += torch.bincount(emb_ind.reshape(-1), minlength=c.k_dynamic)
-    cond_quantize_distributions = {}
-    for idx, (h, parallel_flow, c_cond) in enumerate(zip(h_list[-2::-1], parallel_flows[::-1], c.c_conds)):
-        cond_quantize_distributions[idx] = torch.zeros(quantize_cond[idx].n_embed).to(c.device)
-        y = pool_layer(h)
-        B, _, H, W = y.shape
-        pos_cond = positionalencoding2d(c_cond, H, W).to(c.device).unsqueeze(0).repeat(B, 1, 1, 1)
-        for flow in parallel_flow:
-            flow.subnet.condition = feat_meta
-            flow.subnet.weights_bias = weights_bias
-        if c.semantic_cond:
-            class_embedding = feat_meta.unsqueeze(-1).unsqueeze(-1).repeat(1, 1, H, W)
-            _semantic_embedding = upsamplers[idx](semantic_embedding)
-            if c.quantize_enable and quantize_cond is not None:
-                if c.concat_pos:
-                    #! residual quantize
-                    class_pos_embedding = torch.cat([class_embedding, pos_cond], dim=1)
-                    # _semantic_embedding = torch.cat([_semantic_embedding, pos_cond], dim=1)
-                    residual = _semantic_embedding - class_pos_embedding
-                    _residual, _diff_cond, emb_ind = quantize_cond[idx](residual)
-                    _semantic_embedding = class_pos_embedding + _residual
-                else:
-                    #* indenpendent quantize
-                    _semantic_embedding, _diff_cond, emb_ind = quantize_cond[idx](_semantic_embedding)
-                diff_cond += _diff_cond.mean()
-                cond_quantize_distributions[idx] += torch.bincount(emb_ind.reshape(-1), minlength=quantize_cond[idx].n_embed)
-            if c.concat_dynamic:
-                _semantic_embedding = torch.cat([_semantic_embedding, class_embedding], dim=1)
-            semantic_cond = condition_adapters[idx](_semantic_embedding)
-            cond = torch.cat([pos_cond, semantic_cond], dim=1)
-            if idx == 0:
-                cond_quantize_distributions[3] = torch.zeros(quantize_cond[-1].n_embed).to(c.device)
-                _semantic_embedding = upsamplers[idx](semantic_embedding)
-                if c.quantize_enable and quantize_cond is not None:
-                    if c.concat_pos:
-                        #! residual quantize
-                        # class_embedding = torch.cat([class_embedding, pos_cond], dim=1)
-                        # _semantic_embedding = torch.cat([_semantic_embedding, pos_cond], dim=1)
-                        residual = _semantic_embedding - class_pos_embedding
-                        _residual, _diff_cond, emb_ind = quantize_cond[-1](residual)
-                        _semantic_embedding = class_pos_embedding + _residual
-                    else:
-                        #* indenpendent quantize
-                        _semantic_embedding, _diff_cond, emb_ind = quantize_cond[-1](_semantic_embedding)
-                    diff_cond += _diff_cond.mean()
-                    cond_quantize_distributions[3] += torch.bincount(emb_ind.reshape(-1), minlength=quantize_cond[3].n_embed)
-                if c.concat_dynamic:
-                    _semantic_embedding = torch.cat([_semantic_embedding, class_embedding], dim=1)
-                semantic_cond = condition_adapters[-1](_semantic_embedding)
-                _cond = torch.cat([pos_cond, semantic_cond], dim=1)
-        z, jac = parallel_flow(y, [cond, ])
-        mu, sigma = sigma_mu_generators[::-1][idx](feat_meta)
-        # z = z * (sigma.abs() + 1e-8) + mu #! terrible
-        z = (z - mu) / torch.sqrt(sigma**2 + 1e-8)
+    prototype_quantize_distribution = torch.zeros(c.k_cpc).to(c.device)
+    if c.quantize_enable:
+        prototype_quantize_distribution += torch.bincount(emb_ind.reshape(-1), minlength=c.k_cpc)
+    pattern_quantize_distributions = {}
+    mus = []
+    sigmas = []
+    for idx, (h, parallel_flow, c_pos_cond) in enumerate(zip(h_list[:-1], parallel_flows, c.c_pos_conds)):
+        pattern_quantize_distributions[idx] = torch.zeros(cgpc_quantizers[idx].n_embed).to(c.device)
+        h = pool_layer(h)
+        B, _, H, W = h.shape
+        pe = positionalencoding2d(c_pos_cond, H, W).to(c.device).unsqueeze(0).repeat(B, 1, 1, 1)
+        _h = feature_mlps[idx](h)
+        _h = upsamplers[idx](reduced_semantic_embedding) + _h
+        if c.quantize_enable and cgpc_quantizers is not None:
+            cond_prototype = conceptual_prototype.unsqueeze(-1).unsqueeze(-1).repeat(1, 1, H, W)
+            if c.quantize_type == 'residual':
+                #! residual quantize
+                pos_prototype = torch.cat([pe, cond_prototype], dim=1) if c.concat_pos else cond_prototype
+                residual = _h - pos_prototype
+                residual, _diff_cond, emb_ind = cgpc_quantizers[idx](residual)
+                _h = pos_prototype + residual
+            else:
+                #* indenpendent quantize
+                _h = torch.cat([_h, pe], dim=1) if c.concat_pos else _h
+                _h, _diff_cond, emb_ind = cgpc_quantizers[idx](_h)
+            diff_cond += _diff_cond.mean()
+            if c.quantize_enable:
+                pattern_quantize_distributions[idx] += torch.bincount(emb_ind.reshape(-1), minlength=cgpc_quantizers[idx].n_embed)
+        if c.concat_cpc:
+            parallel_cond = torch.cat([_h, cond_prototype], dim=1)
+        else:
+            parallel_cond = _h              
+        z, jac = parallel_flow(h, [parallel_cond, ])
+        if c.mixed_gaussian:
+            if c.quantize_enable:
+                mu, sigma = sigma_mu_generators[idx](conceptual_prototype)
+            else:
+                mu, sigma = sigma_mu_generators[idx](semantic_vector)
+            mus.append(mu)
+            sigmas.append(sigma)
+            z = (z - mu) / torch.sqrt(sigma**2 + 1e-8)
         z_list.append(z)
         parallel_jac_list.append(jac)
 
-    # fusion_flow.module_list[3].subnet_1.cross_convs.condition = feat_meta
-    # fusion_flow.module_list[3].subnet_2.cross_convs.condition = feat_meta
-    z_list, fuse_jac = fusion_flow(z_list[::-1], _cond)
+    pattern_quantize_distributions[3] = torch.zeros(cgpc_quantizers[-1].n_embed).to(c.device)
+    _h_top = feature_mlps[-1](h_top)
+    _, _, H, W = _h_top.shape
+    pe = positionalencoding2d(c.c_pos_conds[-1], H, W).to(c.device).unsqueeze(0).repeat(B, 1, 1, 1)
+    if c.quantize_enable and cgpc_quantizers is not None:
+        cond_prototype = conceptual_prototype.unsqueeze(-1).unsqueeze(-1).repeat(1, 1, H, W)
+        if c.quantize_type == 'residual':
+            #! residual quantize
+            pos_prototype = torch.cat([pe, cond_prototype], dim=1) if c.concat_pos else cond_prototype
+            residual = _h_top - pos_prototype
+            residual, _diff_cond, emb_ind = cgpc_quantizers[-1](residual)
+            _h_top = pos_prototype + residual
+        else:
+            #* indenpendent quantize
+            _h_top = torch.cat([_h_top, pe], dim=1) if c.concat_pos else _h_top
+            _h_top, _diff_cond, emb_ind = cgpc_quantizers[-1](_h_top)
+        diff_cond += _diff_cond.mean()
+        if c.quantize_enable:
+            pattern_quantize_distributions[3] += torch.bincount(emb_ind.reshape(-1), minlength=cgpc_quantizers[3].n_embed)
+    if c.concat_cpc:
+        fusion_cond = torch.cat([_h_top, cond_prototype], dim=1)
+    else:
+        fusion_cond = _h_top
+    z_list, fuse_jac = fusion_flow(z_list, fusion_cond)
     jac = fuse_jac + sum(parallel_jac_list)
     
-    return z_list, jac, diff_dynamic+diff_cond, dynamic_quantize_distribution, cond_quantize_distributions
+    return z_list, jac, diff_dynamic+diff_cond, prototype_quantize_distribution, pattern_quantize_distributions
 
-def train_meta_epoch(c, epoch, loader, extractor, parallel_flows, fusion_flow, params, optimizer, warmup_scheduler, decay_scheduler, scaler=None, multi_class_adapters=None):
-    parallel_flows = [parallel_flow.train() for parallel_flow in parallel_flows]
-    fusion_flow = fusion_flow.train()
-    multi_class_adapters = multi_class_adapters.train()
+def train_meta_epoch(c, epoch, loader, extractor, models, params, optimizer, warmup_scheduler, decay_scheduler, scaler=None):
+    models = models.train()
 
     for sub_epoch in range(c.sub_epochs):
-        epoch_dynamic_quantize_distribution = torch.zeros(c.k_dynamic).to(c.device)
-        epoch_cond_quantize_distributions = [torch.zeros(quantize.n_embed).to(c.device) for quantize in multi_class_adapters['quantize_cond']]
+        epoch_prototype_quantize_distribution = torch.zeros(c.k_cpc).to(c.device)
+        epoch_pattern_quantize_distributions = [torch.zeros(quantize.n_embed).to(c.device) for quantize in models['cgpc_quantizers']]
         epoch_loss = 0.
         image_count = 0
         for idx, data in enumerate(loader):
@@ -148,7 +147,7 @@ def train_meta_epoch(c, epoch, loader, extractor, parallel_flows, fusion_flow, p
             optimizer.zero_grad()
             if scaler:
                 with autocast():
-                    z_list, jac, diff = model_forward(c, extractor, parallel_flows, fusion_flow, inputs, multi_class_adapters)
+                    z_list, jac, diff = model_forward(c, extractor, models, inputs)
                     loss = 0.
                     for z in z_list:
                         loss += 0.5 * torch.sum(z**2, (1, 2, 3))
@@ -162,8 +161,8 @@ def train_meta_epoch(c, epoch, loader, extractor, parallel_flows, fusion_flow, p
                 scaler.step(optimizer)
                 scaler.update()
             else:
-                z_list, jac, diff, dynamic_quantize_distribution, cond_quantize_distributions \
-                    = model_forward(c, extractor, parallel_flows, fusion_flow, inputs, multi_class_adapters)
+                z_list, jac, diff, prototype_quantize_distribution, pattern_quantize_distributions \
+                    = model_forward(c, extractor, models, inputs)
                 loss = 0.
                 for z in z_list:
                     loss += 0.5 * torch.sum(z**2, (1, 2, 3))
@@ -177,9 +176,9 @@ def train_meta_epoch(c, epoch, loader, extractor, parallel_flows, fusion_flow, p
             epoch_loss += t2np(loss)
             image_count += label.shape[0]
 
-            epoch_dynamic_quantize_distribution += dynamic_quantize_distribution
-            for i, cond_quantize_distribution in cond_quantize_distributions.items():
-                epoch_cond_quantize_distributions[i] += cond_quantize_distribution
+            epoch_prototype_quantize_distribution += prototype_quantize_distribution
+            for i, pattern_quantize_distribution in pattern_quantize_distributions.items():
+                epoch_pattern_quantize_distributions[i] += pattern_quantize_distribution
 
         lr = optimizer.state_dict()['param_groups'][0]['lr']
         if warmup_scheduler:
@@ -193,21 +192,21 @@ def train_meta_epoch(c, epoch, loader, extractor, parallel_flows, fusion_flow, p
                 epoch, sub_epoch, mean_epoch_loss, lr))
         
         levels = "▁▂▃▄▅▆▇█"
-        _epoch_dynamic_quantize_distribution = epoch_dynamic_quantize_distribution / epoch_dynamic_quantize_distribution.sum()
-        print('Dynamic Quantize Distribution:', '({})'.format(len(_epoch_dynamic_quantize_distribution)), ''.join([levels[int(x*7)] for x in _epoch_dynamic_quantize_distribution]))
-        for i, cond_quantize_distribution in enumerate(epoch_cond_quantize_distributions):
-            _cond_quantize_distribution = cond_quantize_distribution / cond_quantize_distribution.sum()
-            print('Cond Quantize Distribution {} ({}):'.format(i, len(_cond_quantize_distribution)), ''.join([levels[int(x*7)] for x in _cond_quantize_distribution]))
+        if epoch_prototype_quantize_distribution.sum() != 0:
+            _epoch_prototype_quantize_distribution = epoch_prototype_quantize_distribution / epoch_prototype_quantize_distribution.sum()
+            print('Dynamic Quantize Distribution:', '({})'.format(len(_epoch_prototype_quantize_distribution)), ''.join([levels[int(x*7)] for x in _epoch_prototype_quantize_distribution]))
+            for i, pattern_quantize_distribution in enumerate(epoch_pattern_quantize_distributions):
+                _pattern_quantize_distribution = pattern_quantize_distribution / pattern_quantize_distribution.sum()
+                print('Cond Quantize Distribution {} ({}):'.format(i, len(_pattern_quantize_distribution)), ''.join([levels[int(x*7)] for x in _pattern_quantize_distribution]))
     if c.reassign_quantize:
-        multi_class_adapters['quantize_dynamic'].reAssign(epoch_dynamic_quantize_distribution)
-        for i, cond_quantize_distribution in enumerate(epoch_cond_quantize_distributions):
-            multi_class_adapters['quantize_cond'][i].reAssign(cond_quantize_distribution)
+        models['cpc_quantizer'].reAssign(epoch_prototype_quantize_distribution)
+        for i, pattern_quantize_distribution in enumerate(epoch_pattern_quantize_distributions):
+            models['cgpc_quantizers'][i].reAssign(pattern_quantize_distribution)
         
 
-def inference_meta_epoch(c, epoch, loader, extractor, parallel_flows, fusion_flow, multi_class_adapters=None):
-    parallel_flows = [parallel_flow.eval() for parallel_flow in parallel_flows]
-    fusion_flow = fusion_flow.eval()
-    multi_class_adapters = multi_class_adapters.eval()
+def inference_meta_epoch(c, epoch, loader, extractor, models):
+    models = models.eval()
+    parallel_flows = models['parallel_flows']
     epoch_loss = 0.
     image_count = 0
     gt_label_list = list()
@@ -225,8 +224,8 @@ def inference_meta_epoch(c, epoch, loader, extractor, parallel_flows, fusion_flo
             gt_label_list.extend(t2np(label))
             gt_mask_list.extend(t2np(mask))
 
-            z_list, jac, diff, dynamic_quantize_distribution, cond_quantize_distributions \
-                    = model_forward(c, extractor, parallel_flows, fusion_flow, inputs, multi_class_adapters)
+            z_list, jac, diff, prototype_quantize_distribution, pattern_quantize_distributions \
+                    = model_forward(c, extractor, models, inputs)
 
             loss = 0.
             for lvl, z in enumerate(z_list):
@@ -280,93 +279,40 @@ def train(c):
 
     extractor, output_channels = build_extractor(c)
     extractor = extractor.to(c.device).eval()
-    parallel_flows, fusion_flow = build_msflow_model(c, output_channels)
-    parallel_flows = [parallel_flow.to(c.device) for parallel_flow in parallel_flows]
-    fusion_flow = fusion_flow.to(c.device)
-    params = list(fusion_flow.parameters())
-    for parallel_flow in parallel_flows:
-        params += list(parallel_flow.parameters())
 
-    channel_semantic = c.dim_meta
-    if c.concat_pos:
-        channel_semantic += c.c_conds[0]
-    semantic_encoder = nn.Sequential(
-        nn.Conv2d(output_channels[-1], channel_semantic, 3, 1, 1),
-        nn.BatchNorm2d(channel_semantic),
+    semantic_mlp = nn.Sequential(
+        nn.Linear(output_channels[-1], c.dim_cpc//2),
+        nn.BatchNorm1d(c.dim_cpc//2),
         nn.ReLU(True),
-    ).to(c.device)
-
-    class semantic_encoder_ms(nn.Module):
-        def __init__(self, in_channels, out_channel):
-            super(semantic_encoder_ms, self).__init__()
-            self.downsamplers = nn.ModuleList([
-                nn.AvgPool2d(2**k, 2**k) for k in range(len(in_channels))])[::-1]
-            self.convs = nn.ModuleList([
-                nn.Sequential(
-                    nn.Conv2d(in_channels[k], out_channel, 3, 1, 1),
-                    nn.BatchNorm2d(out_channel),
-                    nn.ReLU(True),
-                ) for k in range(len(in_channels))])
-            
-            self.scalers = nn.Parameter(torch.ones(len(in_channels)))
-            
-        def forward(self, xs):
-            ys = []
-            for x, downsampler, conv, scaler in zip(xs, self.downsamplers, self.convs, self.scalers):
-                ys.append(conv(downsampler(x)) * scaler)
-            return sum(ys)
-        
-    # semantic_encoder = semantic_encoder_ms(output_channels, 256).to(c.device)
-
-    meta_controller = nn.Sequential(
-        nn.Linear(output_channels[-1], c.dim_meta//2),
-        nn.BatchNorm1d(c.dim_meta//2),
-        nn.ReLU(True),
-        nn.Linear(c.dim_meta//2, c.dim_meta),
-        nn.BatchNorm1d(c.dim_meta),
+        nn.Linear(c.dim_cpc//2, c.dim_cpc),
+        nn.BatchNorm1d(c.dim_cpc),
         nn.ReLU(True)
     ).to(c.device)
+
+    cpc_quantizer = Quantize(c.dim_cpc, c.k_cpc, thresh=1e-4).to(c.device)
+
+    dim_cgpc = c.dim_cpc
+    if c.concat_pos:
+        dim_cgpc += c.c_pos_conds[0]
     
-    upsamplers = nn.ModuleList([
-        # nn.Sequential(
-        #     nn.ConvTranspose2d(256, 256, 4, 2, 1),
-        #     nn.BatchNorm2d(256),
-        #     nn.ReLU(True),
-        # ).to(c.device)
-        nn.Upsample(
-            scale_factor=2**k, mode='bilinear', align_corners=False).to(c.device)
-        for k in range(len(c.c_semantic_conds))
-    ])
-    
-    channel_adapter = channel_semantic
-    if c.concat_dynamic:
-        channel_adapter += c.dim_meta
-    condition_adapters = nn.ModuleList([
-        nn.Conv2d(channel_adapter, c_semantic_cond, 3, 1, 1).to(c.device) for c_semantic_cond in c.c_semantic_conds
-    ])
-    condition_adapters.append(nn.Conv2d(channel_adapter, c.c_semantic_conds[-1], 3, 1, 1).to(c.device))
-    
-    weight_generator = nn.Sequential(
-            nn.Linear(c.dim_meta, 32),
+    feature_mlps = nn.ModuleList([
+        nn.Sequential(
+            nn.Conv2d(output_channel, dim_cgpc // 2, 1, 1, 0),
+            nn.BatchNorm2d(dim_cgpc // 2),
             nn.ReLU(True),
-            nn.Linear(32, (16+1)*16),
+            nn.Conv2d(dim_cgpc // 2, dim_cgpc, 1, 1, 0),
+            nn.BatchNorm2d(dim_cgpc),
+            nn.ReLU(True),
         ).to(c.device)
-    
-    power_op = lambda x: 2 ** x
-    linear_op = lambda x: x+1
-    constant_op = lambda x: 1
-
-    if c.compute_op == 'power':
-        compute_op = power_op
-    elif c.compute_op == 'linear':
-        compute_op = linear_op
-    else:
-        compute_op = constant_op
-
-    cond_quantizers = nn.ModuleList([
-        Quantize(channel_semantic, c.k_cond * compute_op(k), thresh=1e-6).to(c.device) for k in range(3)
+        for output_channel in output_channels
     ])
-    cond_quantizers.append(Quantize(channel_semantic, c.k_cond).to(c.device))
+
+    cgpc_quantizers = nn.ModuleList([
+        Quantize(dim_cgpc, c.k_cgpc, thresh=1e-6).to(c.device) for k in range(4)
+    ])
+
+    for i in range(len(c.c_conds)):
+        c.c_conds[i] = dim_cgpc + c.dim_cpc if c.concat_cpc else dim_cgpc
 
     class sigma_mu_generator(nn.Module):
 
@@ -374,21 +320,6 @@ def train(c):
             super(sigma_mu_generator, self).__init__()
             self.sigma = nn.Linear(in_channels, out_channels)
             self.mu = nn.Linear(in_channels, out_channels)
-            # mid_channels = min(in_channels, out_channels)
-            # self.sigma = nn.Sequential(
-            #     nn.Linear(in_channels, mid_channels), 
-            #     # nn.BatchNorm1d(mid_channels),
-            #     nn.ReLU(True),
-            #     nn.Linear(mid_channels, out_channels),
-            #     nn.Sigmoid()
-            # )
-            # self.mu = nn.Sequential(
-            #     nn.Linear(in_channels, mid_channels), 
-            #     # nn.BatchNorm1d(mid_channels),
-            #     nn.ReLU(True),
-            #     nn.Linear(mid_channels, out_channels),
-            #     nn.Tanh()
-            # )
 
         def forward(self, x):
             sigma = self.sigma(x).unsqueeze(-1).unsqueeze(-1)
@@ -396,56 +327,77 @@ def train(c):
             return sigma, mu
         
     sigma_mu_generators = nn.ModuleList([
-        sigma_mu_generator(c.dim_meta, out_channels).to(c.device) for out_channels in output_channels[:-1]
+        sigma_mu_generator(c.dim_cpc, out_channel).to(c.device) for out_channel in output_channels[:-1]
     ])
+
+    parallel_flows, fusion_flow = build_msflow_model(c, output_channels)
+    parallel_flows = nn.ModuleList(parallel_flows).to(c.device)
+    fusion_flow = fusion_flow.to(c.device)
+
+    semantic_encoder = nn.Sequential(
+        nn.Conv2d(output_channels[-1], dim_cgpc // 2, 1, 1, 0),
+        nn.BatchNorm2d(dim_cgpc // 2),
+        nn.ReLU(True),
+    ).to(c.device)
+
+    upsamplers = nn.ModuleList([
+        nn.Sequential(
+            nn.Upsample(
+                scale_factor=2**k, mode='bilinear', align_corners=False),
+            nn.Conv2d(dim_cgpc // 2, dim_cgpc, 1, 1, 0),
+        ).to(c.device)
+        for k in range(len(c.c_conds))
+    ])[::-1]   
     
-    multi_class_adapters = nn.ModuleDict({
+    models = nn.ModuleDict({
+            'parallel_flows': parallel_flows,
+            'fusion_flow': fusion_flow,
             'semantic_encoder': semantic_encoder, 
-            'meta_controller': meta_controller,
+            'semantic_mlp': semantic_mlp,
             'upsamplers': upsamplers,
-            'condition_adapters': condition_adapters, 
-            'weight_generator': weight_generator, 
-            # 'quantize_cond': Quantize(256, c.k_cond).to(c.device), 
-            'quantize_cond': cond_quantizers, 
-            'quantize_dynamic': Quantize(c.dim_meta, c.k_dynamic, thresh=1e-4).to(c.device),
+            'feature_mlps': feature_mlps, 
+            'cgpc_quantizers': cgpc_quantizers, 
+            'cpc_quantizer': cpc_quantizer,
             'sigma_mu_generators': sigma_mu_generators
         })
     
-    params += multi_class_adapters.parameters()
+    params = list(models.parameters())
     optimizer = torch.optim.Adam(params, lr=c.lr)
     if c.amp_enable:
         scaler = GradScaler()
 
-    det_auroc_obs = Score_Observer('Det.AUROC', c.meta_epochs)
+    det_auroc_obs = Score_Observer('Det.AUROC.mul', c.meta_epochs)
+    det_auroc_obs_add = Score_Observer('Det.AUROC.add', c.meta_epochs)
     loc_auroc_obs = Score_Observer('Loc.AUROC', c.meta_epochs)
     loc_pro_obs = Score_Observer('Loc.PRO', c.meta_epochs)
     
     if c.multi_class:
-        det_auroc_obss = {k: Score_Observer('Det.AUROC', c.meta_epochs, verbose=False) for k in test_loaders.keys()}
+        det_auroc_obss = {k: Score_Observer('Det.AUROC.mul', c.meta_epochs, verbose=True) for k in test_loaders.keys()}
+        det_auroc_obss_add = {k: Score_Observer('Det.AUROC.add', c.meta_epochs, verbose=True) for k in test_loaders.keys()}
         loc_auroc_obss = {k: Score_Observer('Loc.AUROC', c.meta_epochs, verbose=False) for k in test_loaders.keys()}
         loc_pro_obss = {k: Score_Observer('Loc.PRO', c.meta_epochs, verbose=False) for k in test_loaders.keys()}
 
     start_epoch = 0
     if c.mode == 'test':
-        start_epoch = load_weights(parallel_flows, fusion_flow, c.eval_ckpt)
+        start_epoch = load_weights(models, c.eval_ckpt)
         epoch = start_epoch + 1
         if c.multi_class:
             det_auroc, loc_auroc, loc_pro_auc, \
                 best_det_auroc, best_loc_auroc, best_loc_pro = \
-                    multi_class_test(c, test_loaders, extractor, parallel_flows, fusion_flow, multi_class_adapters, det_auroc_obs, loc_auroc_obs, loc_pro_obs, det_auroc_obss, loc_auroc_obss, loc_pro_obss, epoch, pro_eval)
+                    multi_class_test(c, test_loaders, extractor, models, det_auroc_obs, det_auroc_obs_add, loc_auroc_obs, loc_pro_obs, det_auroc_obss, det_auroc_obss_add, loc_auroc_obss, loc_pro_obss, epoch, c.pro_eval)
         else:
-            gt_label_list, gt_mask_list, outputs_list, size_list = inference_meta_epoch(c, epoch, test_loader, extractor, parallel_flows, fusion_flow, multi_class_adapters)
+            gt_label_list, gt_mask_list, outputs_list, size_list = inference_meta_epoch(c, epoch, test_loader, extractor, models)
 
             anomaly_score, anomaly_score_map_add, anomaly_score_map_mul = post_process(c, size_list, outputs_list)
 
             det_auroc, loc_auroc, loc_pro_auc, \
                 best_det_auroc, best_loc_auroc, best_loc_pro = \
-                    eval_det_loc(det_auroc_obs, loc_auroc_obs, loc_pro_obs, epoch, gt_label_list, anomaly_score, gt_mask_list, anomaly_score_map_add, anomaly_score_map_mul, c.loc_eval, pro_eval)
+                    eval_det_loc(det_auroc_obs, det_auroc_obs_add, loc_auroc_obs, loc_pro_obs, epoch, gt_label_list, anomaly_score, gt_mask_list, anomaly_score_map_add, anomaly_score_map_mul, c.loc_eval, c.pro_eval)
         
         return
     
     if c.resume:
-        last_epoch = load_weights(parallel_flows, fusion_flow, os.path.join(c.ckpt_dir, 'last.pt'), optimizer)
+        last_epoch = load_weights(models, os.path.join(c.ckpt_dir, 'last.pt'), optimizer)
         start_epoch = last_epoch + 1
         print('Resume from epoch {}'.format(start_epoch))
 
@@ -469,7 +421,7 @@ def train(c):
 
     for epoch in range(start_epoch, c.meta_epochs):
         print()
-        train_meta_epoch(c, epoch, train_loader, extractor, parallel_flows, fusion_flow, params, optimizer, warmup_scheduler, decay_scheduler, scaler if c.amp_enable else None, multi_class_adapters)
+        train_meta_epoch(c, epoch, train_loader, extractor, models, params, optimizer, warmup_scheduler, decay_scheduler, scaler if c.amp_enable else None)
         
         if c.pro_eval and (epoch > 0 and epoch % c.pro_eval_interval == 0):
             pro_eval = True
@@ -479,9 +431,9 @@ def train(c):
         if c.multi_class:
             det_auroc, loc_auroc, loc_pro_auc, \
                 best_det_auroc, best_loc_auroc, best_loc_pro = \
-                    multi_class_test(c, test_loaders, extractor, parallel_flows, fusion_flow, multi_class_adapters, det_auroc_obs, loc_auroc_obs, loc_pro_obs, det_auroc_obss, loc_auroc_obss, loc_pro_obss, epoch, pro_eval)
+                    multi_class_test(c, test_loaders, extractor, models, det_auroc_obs, det_auroc_obs_add, loc_auroc_obs, loc_pro_obs, det_auroc_obss, det_auroc_obss_add, loc_auroc_obss, loc_pro_obss, epoch, pro_eval)
         else:
-            gt_label_list, gt_mask_list, outputs_list, size_list = inference_meta_epoch(c, epoch, test_loader, extractor, parallel_flows, fusion_flow, multi_class_adapters)
+            gt_label_list, gt_mask_list, outputs_list, size_list = inference_meta_epoch(c, epoch, test_loader, extractor, models)
 
             anomaly_score, anomaly_score_map_add, anomaly_score_map_mul = post_process(c, size_list, outputs_list)
 
@@ -499,31 +451,35 @@ def train(c):
                     step=epoch
                 )
 
-        save_weights(epoch, parallel_flows, fusion_flow, 'last', c.ckpt_dir, optimizer)
+        save_weights(epoch, models, 'last', c.ckpt_dir, optimizer)
         if best_det_auroc and c.mode == 'train':
-            save_weights(epoch, parallel_flows, fusion_flow, 'best_det', c.ckpt_dir)
+            save_weights(epoch, models, 'best_det', c.ckpt_dir)
         if best_loc_auroc and c.mode == 'train':
-            save_weights(epoch, parallel_flows, fusion_flow, 'best_loc_auroc', c.ckpt_dir)
+            save_weights(epoch, models, 'best_loc_auroc', c.ckpt_dir)
         if best_loc_pro and c.mode == 'train':
-            save_weights(epoch, parallel_flows, fusion_flow, 'best_loc_pro', c.ckpt_dir)
+            save_weights(epoch, models, 'best_loc_pro', c.ckpt_dir)
 
-def multi_class_test(c, test_loaders, extractor, parallel_flows, fusion_flow, multi_class_adapters, det_auroc_obs, loc_auroc_obs, loc_pro_obs, det_auroc_obss, loc_auroc_obss, loc_pro_obss, epoch, pro_eval):
+def multi_class_test(c, test_loaders, extractor, models, det_auroc_obs, det_auroc_obs_add, loc_auroc_obs, loc_pro_obs, det_auroc_obss, det_auroc_obss_add, loc_auroc_obss, loc_pro_obss, epoch, pro_eval):
     det_aurocs = {}
+    det_aurocs_add = {}
     loc_aurocs = {}
     loc_pro_aucs = {}
     for k, v in test_loaders.items():
-        gt_label_list, gt_mask_list, outputs_list, size_list = inference_meta_epoch(c, epoch, v, extractor, parallel_flows, fusion_flow, multi_class_adapters)
+        gt_label_list, gt_mask_list, outputs_list, size_list = inference_meta_epoch(c, epoch, v, extractor, models)
 
         anomaly_score, anomaly_score_map_add, anomaly_score_map_mul = post_process(c, size_list, outputs_list)
                 
         # print('Class: {}'.format(k), '-'*50)
-        det_auroc, loc_auroc, loc_pro_auc, _, _, _ = \
-                    eval_det_loc(det_auroc_obss[k], loc_auroc_obss[k], loc_pro_obss[k], epoch, gt_label_list, anomaly_score, gt_mask_list, anomaly_score_map_add, anomaly_score_map_mul, c.loc_eval, pro_eval)
+        det_auroc, det_auroc_add, loc_auroc, loc_pro_auc, _, _, _ = \
+                    eval_det_loc(det_auroc_obss[k], det_auroc_obss_add[k], loc_auroc_obss[k], loc_pro_obss[k], epoch, gt_label_list, anomaly_score, gt_mask_list, anomaly_score_map_add, anomaly_score_map_mul, c.loc_eval, pro_eval)
         det_aurocs[k] = det_auroc
+        det_aurocs_add[k] = det_auroc_add
         loc_aurocs[k] = loc_auroc
         loc_pro_aucs[k] = loc_pro_auc
     print('Multi Classes', '-'*50)
     best_det_auroc = det_auroc_obs.update(np.mean(list(det_aurocs.values())), epoch)
+    best_det_auroc_add = det_auroc_obs_add.update(np.mean(list(det_aurocs_add.values())), epoch)
+    best_det_auroc = best_det_auroc or best_det_auroc_add
     best_loc_auroc = loc_auroc_obs.update(np.mean(list(loc_aurocs.values())), epoch)
     if pro_eval:
         best_loc_pro = loc_pro_obs.update(np.mean(list(loc_pro_aucs.values())), epoch)

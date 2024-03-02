@@ -61,7 +61,7 @@ class subnet_bottleneck_conv_ln(nn.Module):
     
 class subnet_dynamic_conv_ln(nn.Module):
 
-    def __init__(self, dim_in, dim_out, dim_meta=512, ratio_dynamic=8):
+    def __init__(self, dim_in, dim_out, dim_cpc=512, ratio_dynamic=8):
         super().__init__()
         self.dim_in = dim_in
         self.dim_out = dim_out
@@ -70,7 +70,7 @@ class subnet_dynamic_conv_ln(nn.Module):
         self.ln1 = nn.LayerNorm(self.dim_mid)
         self.relu = nn.ReLU(True)
         self.weight_generator = nn.Sequential(
-            nn.Linear(dim_meta, self.dim_mid * 2),
+            nn.Linear(dim_cpc, self.dim_mid * 2),
             # nn.LayerNorm(self.dim_mid * 2),
             nn.BatchNorm1d(self.dim_mid * 2),
             nn.ReLU(True),
@@ -102,54 +102,9 @@ class subnet_dynamic_conv_ln(nn.Module):
 
         return out
 
-# class subnet_dynamic_conv3_ln(nn.Module):
-
-#     def __init__(self, dim_in, dim_out, dim_meta=512, ratio_dynamic=8):
-#         super().__init__()
-#         self.dim_in = dim_in
-#         self.dim_out = dim_out
-#         self.dim_mid = dim_in // ratio_dynamic
-#         self.conv1 = nn.Conv2d(self.dim_in, self.dim_mid, 3, 1, 1)
-#         self.ln1 = nn.LayerNorm(self.dim_mid)
-#         self.relu = nn.ReLU(True)
-#         self.weight_generator = nn.Sequential(
-#             nn.Linear(dim_meta, self.dim_mid * 2),
-#             # nn.LayerNorm(self.dim_mid * 2),
-#             nn.BatchNorm1d(self.dim_mid * 2),
-#             nn.ReLU(True),
-#             nn.Linear(self.dim_mid * 2, self.dim_mid**2*9+self.dim_mid),
-#             # nn.ReLU(True),
-#         )
-#         self.ln2 = nn.LayerNorm(self.dim_mid)
-#         self.conv3 = nn.Conv2d(self.dim_mid, self.dim_out, 1, 1, 0)
-        
-#     def dynamic_conv(self, x):
-#         b = x.shape[0]
-#         x = x.reshape(1, -1, x.shape[2], x.shape[3])
-#         weights_bias = self.weight_generator(self.condition)
-#         weights, bias = weights_bias[:, :self.dim_mid**2*9], weights_bias[:, self.dim_mid**2*9:]
-#         x = F.conv2d(x,
-#                      weights.reshape(b*self.dim_mid, self.dim_mid, 3, 3), 
-#                      bias=bias.reshape(b*self.dim_mid),
-#                      padding=1,
-#                      groups=b)
-        
-#         return x.reshape(b, self.dim_mid, x.shape[2], x.shape[3])
-
-#     def forward(self, x):
-#         out = self.conv1(x)
-#         out = self.ln1(out.permute(0, 2, 3, 1)).permute(0, 3, 1, 2)
-#         out = self.relu(out)
-#         out = self.dynamic_conv(out)
-#         out = self.ln2(out.permute(0, 2, 3, 1)).permute(0, 3, 1, 2)
-#         out = self.relu(out)
-#         out = self.conv3(out)
-
-#         return out
-
 class subnet_dynamic_conv_ln_shared(nn.Module):
 
-    def __init__(self, dim_in, dim_out, dim_meta=512, ratio_dynamic=8):
+    def __init__(self, dim_in, dim_out, dim_cpc=512, ratio_dynamic=8):
         super().__init__()
         self.dim_in = dim_in
         self.dim_out = dim_out
@@ -185,7 +140,7 @@ class subnet_dynamic_conv_ln_shared(nn.Module):
 
 class subnet_dynamic_conv_bn(nn.Module):
 
-    def __init__(self, dim_in, dim_out, dim_meta=512, ratio_dynamic=8):
+    def __init__(self, dim_in, dim_out, dim_cpc=512, ratio_dynamic=8):
         super().__init__()
         self.dim_in = dim_in
         self.dim_out = dim_out
@@ -194,7 +149,7 @@ class subnet_dynamic_conv_bn(nn.Module):
         self.bn1 = nn.BatchNorm2d(self.dim_mid)
         self.relu = nn.ReLU(True)
         self.weight_generator = nn.Sequential(
-            nn.Linear(dim_meta, self.dim_mid * 2),
+            nn.Linear(dim_cpc, self.dim_mid * 2),
             nn.BatchNorm1d(self.dim_mid * 2),
             nn.ReLU(True),
             nn.Linear(self.dim_mid * 2, (self.dim_mid+1)*self.dim_mid),
@@ -226,23 +181,19 @@ def single_parallel_flows(c_feat, c_cond, n_block, n_cond_block, clamp_alpha, su
     print('Build parallel flows: channels:{}, block:{}, cond_block:{}, cond:{}'.format(c_feat, n_block, n_cond_block, c_cond))
     for k in range(n_block):
         _subnet = subnet_cond if k < n_cond_block else subnet # first dynamic conv
-        # _subnet = subnet_cond if n_block-k <= n_cond_block else subnet # last dynamic conv
         flows.append(Fm.AllInOneBlock, cond=0, cond_shape=(c_cond, 1, 1), subnet_constructor=_subnet, affine_clamping=clamp_alpha,
             global_affine_type='SOFTPLUS')
     return flows
 
 def build_msflow_model(c, c_feats):
     c_conds = c.c_conds
-    if c.semantic_cond:
-        c_conds = [x + y for x, y in zip(c.c_conds, c.c_semantic_conds)]
     n_blocks = c.parallel_blocks
     n_cond_blocks = c.condition_blocks
     clamp_alpha = c.clamp_alpha
     parallel_flows = []
     for c_feat, c_cond, n_block, n_cond_block in zip(c_feats, c_conds, n_blocks, n_cond_blocks):
         parallel_flows.append(
-            # single_parallel_flows(c_feat, c_cond, n_block, n_cond_block, clamp_alpha, subnet=subnet_conv_bn, subnet_cond=partial(subnet_dynamic_conv_bn, ratio_dynamic=c.ratio_dynamic, dim_meta=c.dim_meta)))
-            single_parallel_flows(c_feat, c_cond, n_block, n_cond_block, clamp_alpha, subnet=subnet_conv_ln, subnet_cond=partial(subnet_dynamic_conv_ln, ratio_dynamic=c.ratio_dynamic, dim_meta=c.dim_meta)))
+            single_parallel_flows(c_feat, c_cond, n_block, n_cond_block, clamp_alpha, subnet=subnet_conv_ln, subnet_cond=partial(subnet_dynamic_conv_ln, ratio_dynamic=c.ratio_dynamic, dim_cpc=c.dim_cpc)))
     
     c_feats = c_feats[:-1]
     print("Build fusion flow with channels", c_feats)
@@ -254,7 +205,6 @@ def build_msflow_model(c, c_feats):
         nodes.append(Ff.Node(nodes[-n_inputs], Fm.PermuteRandom, {}, name='permute_{}'.format(idx)))
     conditions_fusion = Ff.ConditionNode(c_cond, 1, 1, name='condition_fusion')
     nodes.append(Ff.Node([(nodes[-n_inputs+i], 0) for i in range(n_inputs)], FusionCouplingLayer, {'clamp': clamp_alpha, }, conditions=conditions_fusion, name='fusion flow'))
-    # nodes.append(Ff.Node([(nodes[-n_inputs+i], 0) for i in range(n_inputs)], FusionCouplingLayer, {'clamp': clamp_alpha}, name='fusion flow'))
     for idx, c_feat in enumerate(c_feats):
         nodes.append(Ff.OutputNode(eval('nodes[-idx-1].out{}'.format(idx)), name='output_{}'.format(idx)))
     nodes.append(conditions_fusion)

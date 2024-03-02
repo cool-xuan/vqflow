@@ -64,10 +64,21 @@ def single_process(anomaly_score_map, gt_mask, thred):
     return pros_mean, fpr
 
 
-def eval_det_loc(det_auroc_obs, loc_auroc_obs, loc_pro_obs, epoch, gt_label_list, anomaly_score, gt_mask_list, anomaly_score_map_add, anomaly_score_map_mul, loc_eval, pro_eval):
+def eval_det_loc(det_auroc_obs, det_auroc_obs_add, loc_auroc_obs, loc_pro_obs, epoch, gt_label_list, anomaly_score, gt_mask_list, anomaly_score_map_add, anomaly_score_map_mul, loc_eval, pro_eval):
     gt_label = np.asarray(gt_label_list, dtype=np.bool)
     gt_mask = np.squeeze(np.asarray(gt_mask_list, dtype=np.bool), axis=1)
     det_auroc, best_det_auroc = eval_det_auroc(det_auroc_obs, epoch, gt_label, anomaly_score)
+    _anomaly_score_map_add = anomaly_score_map_add.reshape(
+        anomaly_score_map_add.shape[0], -1
+    ).copy()
+    b, hw = _anomaly_score_map_add.shape
+    top_k = int(hw * 0.03)
+    _anomaly_score_map_add.sort(axis=-1)
+    _anomaly_score_map_add = _anomaly_score_map_add[:, ::-1]
+    anomaly_score_add = np.mean(
+        _anomaly_score_map_add[:, :top_k],
+        axis=1)
+    det_auroc_add, _ = eval_det_auroc(det_auroc_obs_add, epoch, gt_label, anomaly_score_add)
     if loc_eval:
         loc_auroc, best_loc_auroc = eval_loc_auroc(loc_auroc_obs, epoch, gt_mask, anomaly_score_map_add)
     else:
@@ -77,4 +88,4 @@ def eval_det_loc(det_auroc_obs, loc_auroc_obs, loc_pro_obs, epoch, gt_label_list
     else:
         loc_pro_auc, best_loc_pro = 0., False
 
-    return det_auroc, loc_auroc, loc_pro_auc, best_det_auroc, best_loc_auroc, best_loc_pro
+    return det_auroc, det_auroc_add, loc_auroc, loc_pro_auc, best_det_auroc, best_loc_auroc, best_loc_pro

@@ -32,7 +32,6 @@ img_mean, img_std = [0.485, 0.456, 0.406], [0.229, 0.224, 0.225]
 extractor = 'wide_resnet50_2' # [resnet18, resnet34, resnet50, resnext50_32x4d, wide_resnet50_2]
 pool_type = 'avg'
 c_conds = [64, 64, 64]
-c_semantic_conds = [64, 64, 64]
 parallel_blocks = [2, 5, 8]
 clamp_alpha = 1.9
 

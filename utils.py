@@ -27,25 +27,29 @@ def positionalencoding2d(D, H, W):
     return P
 
 
-def save_weights(epoch, parallel_flows, fusion_flow, model_name, ckpt_dir, optimizer=None):
+def save_weights(epoch, models, model_name, ckpt_dir, optimizer=None):
     if not os.path.exists(ckpt_dir):
         os.makedirs(ckpt_dir)
     file_name = '{}.pt'.format(model_name)
     file_path = os.path.join(ckpt_dir, file_name)
     print('Saving weights to {}'.format(file_path))
-    state = {'epoch': epoch,
-             'fusion_flow': fusion_flow.state_dict(),
-             'parallel_flows': [parallel_flow.state_dict() for parallel_flow in parallel_flows]}
+    state = {'epoch': epoch,}
+            #  'models': models.state_dict()}
+    state.update(
+        {k: v.state_dict() for k, v in models.items()}
+    )
     if optimizer is not None:
         state['optimizer'] = optimizer.state_dict()
     torch.save(state, file_path)
 
 
-def load_weights(parallel_flows, fusion_flow, ckpt_path, optimizer=None):
+def load_weights(models, ckpt_path, optimizer=None):
     print('Loading weights from {}'.format(ckpt_path))
     state_dict = torch.load(ckpt_path)
     
     fusion_state = state_dict['fusion_flow']
+    parallel_flows = models['parallel_flows']
+    fusion_flow = models['fusion_flow']
     maps = {}
     for i in range(len(parallel_flows)):
         maps[fusion_flow.module_list[i].perm.shape[0]] = i
@@ -58,8 +62,18 @@ def load_weights(parallel_flows, fusion_flow, ckpt_path, optimizer=None):
         fusion_state[k] = v
     fusion_flow.load_state_dict(fusion_state, strict=False)
 
-    for parallel_flow, state in zip(parallel_flows, state_dict['parallel_flows']):
-        parallel_flow.load_state_dict(state, strict=False)
+    # for parallel_flow, state in zip(parallel_flows, state_dict['parallel_flows']):
+    #     parallel_flow.load_state_dict(state, strict=False)
+
+    # models.load_state_dict(state_dict['models'])
+
+    for k, v in models.items():
+        if k == 'fusion_flow':
+            continue
+        if k in state_dict:
+            v.load_state_dict(state_dict[k])
+        else:
+            print(f'Warning: {k} not found in state_dict')
 
     if optimizer:
         optimizer.load_state_dict(state_dict['optimizer'])
