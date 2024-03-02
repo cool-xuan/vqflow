@@ -1,4 +1,9 @@
 from .resnet import *
+import timm
+
+default_cfgs = {
+    'convnext_xlarge_384_in22ft1k' : [256, 512, 1024, 2048],
+}
 
 def build_extractor(c):
     if   c.extractor == 'resnet18':
@@ -11,11 +16,22 @@ def build_extractor(c):
         extractor = resnext50_32x4d(pretrained=True, progress=True)
     elif c.extractor == 'wide_resnet50_2':
         extractor = wide_resnet50_2(pretrained=True, progress=True)
-
+    elif c.extractor == 'resnext101_32x8d':
+        extractor = resnext101_32x8d(pretrained=True, progress=True)
+    elif c.extractor == 'convnext_xlarge_384_in22ft1k':
+        # print('convnext_xlarge_384_in22ft1k picked')
+        extractor = timm.create_model('convnext_xlarge_384_in22ft1k', pretrained=True, features_only=True)
     output_channels = []
     if 'wide' in c.extractor:
         for i in range(4):
             output_channels.append(eval('extractor.layer{}[-1].conv3.out_channels'.format(i+1)))
+    elif 'resnext' in c.extractor:
+        for i in range(4):
+            # print(eval('extractor.layer{}'.format(i+1)))
+            output_channels.append(eval('extractor.layer{}[-1].conv3.out_channels'.format(i+1)))
+    elif c.extractor == 'convnext_xlarge_384_in22ft1k':
+        for i in range(4):
+            output_channels.append(default_cfgs['convnext_xlarge_384_in22ft1k'][i])
     else:
         for i in range(4):
             output_channels.append(extractor.eval('layer{}'.format(i+1))[-1].conv2.out_channels)
