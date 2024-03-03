@@ -3,6 +3,7 @@ import timm
 
 default_cfgs = {
     'convnext_xlarge_384_in22ft1k' : [256, 512, 1024, 2048],
+    'convnextv2_base' : [128, 256, 512, 1024],
 }
 
 def build_extractor(c):
@@ -21,6 +22,11 @@ def build_extractor(c):
     elif c.extractor == 'convnext_xlarge_384_in22ft1k':
         # print('convnext_xlarge_384_in22ft1k picked')
         extractor = timm.create_model('convnext_xlarge_384_in22ft1k', pretrained=True, features_only=True)
+    elif c.extractor == 'convnextv2_base':
+        print('convnextv2_base picked')
+        extractor = timm.create_model('convnextv2_base', pretrained=True, features_only=True, pretrained_cfg_overlay=dict(
+                                                     file='convnextv2_base_22k_384_ema.pt'))
+    
     output_channels = []
     if 'wide' in c.extractor:
         for i in range(4):
@@ -32,6 +38,9 @@ def build_extractor(c):
     elif c.extractor == 'convnext_xlarge_384_in22ft1k':
         for i in range(4):
             output_channels.append(default_cfgs['convnext_xlarge_384_in22ft1k'][i])
+    elif c.extractor == 'convnextv2_base':
+        for i in range(4):
+            output_channels.append(default_cfgs['convnextv2_base'][i])
     else:
         for i in range(4):
             output_channels.append(extractor.eval('layer{}'.format(i+1))[-1].conv2.out_channels)
