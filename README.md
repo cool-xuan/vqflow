@@ -96,40 +96,40 @@ CUDA_VISIBLE_DEVICES=0 python main.py --mode test --dataset mvtec --class-names 
 
 | Classes             | Det. AUROC | Loc. AUROC |
 | ------------------- | :--------: | :--------: |
-| Carpet              |   100.0    |    99.4    |
-| Grid                |    99.8    |    99.4    |
-| Leather             |   100.0    |    99.7    |
-| Tile                |   100.0    |    98.2    |
-| Wood                |   100.0    |    97.1    |
-| Bottle              |   100.0    |    99.0    |
-| Cable               |    99.5    |    98.5    |
-| Capsule             |    99.2    |    99.1    |
-| Hazelnut            |   100.0    |    98.7    |
-| Metal Nut           |   100.0    |    99.3    |
-| Pill                |    99.6    |    98.8    |
-| Screw               |    97.8    |    99.1    |
-| Toothbrush          |   100.0    |    98.5    |
-| Transistor          |   100.0    |    98.3    |
-| Zipper              |   100.0    |    99.2    |
-| **Overall Average** |  **99.7**  |  **98.8**  |
+| Carpet              |    99.9    |    98.6    |
+| Grid                |    99.9    |    99.1    |
+| Leather             |   100.0    |    99.0    |
+| Tile                |    99.9    |    97.2    |
+| Wood                |   100.0    |    95.5    |
+| Bottle              |   100.0    |    98.4    |
+| Cable               |    99.1    |    97.9    |
+| Capsule             |    99.0    |    99.3    |
+| Hazelnut            |   100.0    |    99.2    |
+| Metal Nut           |   100.0    |    98.8    |
+| Pill                |    98.2    |    98.8    |
+| Screw               |    98.4    |    99.0    |
+| Toothbrush          |    98.2    |    98.8    |
+| Transistor          |   100.0    |    96.3    |
+| Zipper              |   100.0    |    98.9    |
+| **Overall Average** |  **99.5**  |  **98.3**  |
 
 ## Results on the VisA benchmark
 
 | Classes             | Det. AUROC | Loc. AUROC |
 | ------------------- | :--------: | :--------: |
-| candle              |    98.3    |    99.5    |
-| capsules            |    96.2    |    99.7    |
-| cashew              |    98.7    |    99.1    |
-| chewinggum          |    99.7    |    99.4    |
-| fryum               |    99.6    |    92.8    |
-| macaroni1           |    97.6    |    99.8    |
-| macaroni2           |    89.5    |    99.6    |
-| pcb1                |    98.9    |    99.8    |
-| pcb2                |    97.8    |    99.2    |
-| pcb3                |    98.9    |    99.4    |
-| pcb4                |    99.5    |    99.1    |
-| pipe_fryum          |    98.9    |    99.1    |
-| **Overall Average** |  **97.8**  |  **98.9**  |
+| candle              |    98.3    |    99.2    |
+| capsules            |    96.6    |    99.5    |
+| cashew              |    96.8    |    99.4    |
+| chewinggum          |    99.7    |    99.1    |
+| fryum               |    98.8    |    96.1    |
+| macaroni1           |    94.4    |    99.2    |
+| macaroni2           |    84.4    |    98.8    |
+| pcb1                |    95.3    |    99.6    |
+| pcb2                |    96.2    |    98.6    |
+| pcb3                |    94.9    |    98.9    |
+| pcb4                |    99.3    |    98.9    |
+| pipe_fryum          |    99.2    |    99.1    |
+| **Overall Average** |  **95.9**  |  **98.9**  |
 
 
 ## Thanks to
