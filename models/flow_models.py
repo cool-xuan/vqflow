@@ -176,12 +176,11 @@ class subnet_dynamic_conv_bn(nn.Module):
 
         return out
 
-def single_parallel_flows(c_feat, c_cond, n_block, n_cond_block, clamp_alpha, subnet=subnet_conv_ln, subnet_cond=subnet_dynamic_conv_ln):
+def single_parallel_flows(c_feat, c_cond, n_block, n_cond_block, clamp_alpha, subnet=subnet_conv_ln):
     flows = Ff.SequenceINN(c_feat, 1, 1)
     print('Build parallel flows: channels:{}, block:{}, cond_block:{}, cond:{}'.format(c_feat, n_block, n_cond_block, c_cond))
     for k in range(n_block):
-        _subnet = subnet_cond if k < n_cond_block else subnet # first dynamic conv
-        flows.append(Fm.AllInOneBlock, cond=0, cond_shape=(c_cond, 1, 1), subnet_constructor=_subnet, affine_clamping=clamp_alpha,
+        flows.append(Fm.AllInOneBlock, cond=0, cond_shape=(c_cond, 1, 1), subnet_constructor=subnet, affine_clamping=clamp_alpha,
             global_affine_type='SOFTPLUS')
     return flows
 
@@ -193,7 +192,7 @@ def build_msflow_model(c, c_feats):
     parallel_flows = []
     for c_feat, c_cond, n_block, n_cond_block in zip(c_feats, c_conds, n_blocks, n_cond_blocks):
         parallel_flows.append(
-            single_parallel_flows(c_feat, c_cond, n_block, n_cond_block, clamp_alpha, subnet=subnet_conv_ln, subnet_cond=partial(subnet_dynamic_conv_ln, ratio_dynamic=c.ratio_dynamic, dim_cpc=c.dim_cpc)))
+            single_parallel_flows(c_feat, c_cond, n_block, n_cond_block, clamp_alpha, subnet=subnet_conv_ln))
     
     c_feats = c_feats[:-1]
     print("Build fusion flow with channels", c_feats)

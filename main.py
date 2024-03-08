@@ -57,14 +57,8 @@ def parsing_args(c):
                         help='pool type for extracted feature maps')
     parser.add_argument('--parallel-blocks', default=[2, 5, 8], type=int, metavar='L', nargs='+',
                         help='number of flow blocks used in parallel flows.')
-    parser.add_argument('--condition-blocks', default=[0, 0, 0], type=int, metavar='L', nargs='+',
-                        help='number of flow blocks with dynamic conv.')
     parser.add_argument('--c-conds', default=[64, 64, 64], type=int, metavar='L', nargs='+',
                         help='positional channel number of condition used in parallel flows.')
-    parser.add_argument('--c-pos-conds', default=[64, 64, 64], type=int, metavar='L', nargs='+',
-                        help='positional channel number of condition used in parallel flows.')
-    parser.add_argument('--c-semantic-conds', default=[64, 64, 64], type=int, metavar='L', nargs='+',
-                        help='semantic channel number of condition used in parallel flows.')
     parser.add_argument('--loc-eval', action='store_true', default=False, 
                         help='evaluate the loc auc score or not.')
     parser.add_argument('--pro-eval', action='store_true', default=False, 
@@ -72,30 +66,28 @@ def parsing_args(c):
     parser.add_argument('--pro-eval-interval', default=4, type=int, 
                         help='interval for pro evaluation.')
     
-    parser.add_argument('--ratio-dynamic', default=4, type=int, 
-                        help='shrunk ratio of dynamic conv.')
-    parser.add_argument('--dim-cpc', default=256, type=int, 
-                        help='dim of dynamic conv.')
-    
     parser.add_argument('--quantize-enable', action='store_true', default=False, 
-                        help='use quantize or not.')
+                        help='use quantization or not.')
     parser.add_argument('--quantize-type', type=str, default='residual', 
                         help='residual quantize or naive quantize.')
+    parser.add_argument('--no-pattern-quantize', action='store_true', default=False, 
+                        help='disable pattern quantization')
     parser.add_argument('--concat-pos', action='store_true', default=False, 
-                        help='concat pe for cgpc quantization or not.')
+                        help='concat pe for cspc quantization or not.')
     parser.add_argument('--reassign-quantize', action='store_true', default=False, 
                         help='reassign quantize or not.')
     parser.add_argument('--quantize-weight', default=1., type=float, 
                         help='weight for quantize loss.')
-    parser.add_argument('--k-cgpc', default=512, type=int,
-                        help='number of clusters for quantize of cond features.')
+    parser.add_argument('--dim-cpc', default=512, type=int, 
+                        help='dim of conceptual prototype book.')
+    parser.add_argument('--c-pos-conds', default=[64, 64, 64], type=int, metavar='L', nargs='+',
+                        help='positional channel number of condition used in parallel flows.')
+    parser.add_argument('--k-cspc', default=512, type=int,
+                        help='number of clusters in CSPC.')
     parser.add_argument('--k-cpc', default=32, type=int,
-                        help='number of clusters for quantize of dynamic features.')
-    
+                        help='number of clusters in CPC.')
     parser.add_argument('--mixed-gaussian', action='store_true', default=False, 
                         help='map to mixed gaussian or not.')
-    parser.add_argument('--concat-cpc', action='store_true', default=False, 
-                        help='concat cpc prototypes as cond features for flows or not.')
     
     args = parser.parse_args()
 
@@ -120,7 +112,7 @@ def parsing_args(c):
 def main(c):
     c = parsing_args(c)
     init_seeds(seed=c.seed)
-    c.version_name = 'msflow_{}_{}pool_pl{}'.format(c.extractor, c.pool_type, "".join([str(x) for x in c.parallel_blocks]))
+    c.version_name = 'vqflow_{}_kc{}_kp{}'.format(c.extractor, c.k_cpc, c.k_cspc)
     if c.multi_class:
         print('-+'*5, 'multi-class', '+-'*5)
         print('training on {} classes: {}'.format(len(c.class_names), ", ".join(c.class_names)))

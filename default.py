@@ -17,7 +17,7 @@ lr_decay_milestones = [70, 90]
 lr_decay_gamma = 0.33
 lr_warmup = True
 lr_warmup_from = 0.1
-lr_warmup_epochs = 3
+lr_warmup_epochs = 5
 batch_size = 16
 workers = 16
 
@@ -25,11 +25,11 @@ workers = 16
 # dataset
 dataset = 'mvtec' # [mvtec, visa]
 class_name = 'bottle'
-input_size = (512, 512)
+input_size = (384, 384)
 img_mean, img_std = [0.485, 0.456, 0.406], [0.229, 0.224, 0.225]
 
 # model
-extractor = 'wide_resnet50_2' # [resnet18, resnet34, resnet50, resnext50_32x4d, wide_resnet50_2]
+extractor = 'convnextv2_base' # [resnet18, resnet34, resnet50, resnext50_32x4d, wide_resnet50_2]
 pool_type = 'avg'
 c_conds = [64, 64, 64]
 parallel_blocks = [2, 5, 8]

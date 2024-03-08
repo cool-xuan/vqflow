@@ -18,16 +18,16 @@ from evaluations import eval_det_loc
 
 from models.quantize import Quantize
 
-def extract_features(c, extractor, inputs):
-    if c.pre_extract:
+def extract_features(c, extractor, inputs, mode='test'):
+    if c.pre_extract and mode == 'train':
         h_list = inputs
     else:
         h_list = extractor(*inputs)
         
     return h_list
 
-def model_forward(c, extractor, models, inputs):
-    h_list = extract_features(c, extractor, inputs)
+def model_forward(c, extractor, models, inputs, mode='test'):
+    h_list = extract_features(c, extractor, inputs, mode)
     if c.pool_type == 'avg':
         pool_layer = nn.AvgPool2d(3, 2, 1)
     elif c.pool_type == 'max':
@@ -41,7 +41,7 @@ def model_forward(c, extractor, models, inputs):
     semantic_mlp = getattr(models, 'semantic_mlp', None)
     upsamplers = getattr(models, 'upsamplers', None)
     feature_mlps = getattr(models, 'feature_mlps', None)
-    cgpc_quantizers = getattr(models, 'cgpc_quantizers', None)
+    cspc_quantizers = getattr(models, 'cspc_quantizers', None)
     cpc_quantizer = getattr(models, 'cpc_quantizer', None)
     sigma_mu_generators = getattr(models, 'sigma_mu_generators', None)
 
@@ -65,31 +65,31 @@ def model_forward(c, extractor, models, inputs):
     mus = []
     sigmas = []
     for idx, (h, parallel_flow, c_pos_cond) in enumerate(zip(h_list[:-1], parallel_flows, c.c_pos_conds)):
-        pattern_quantize_distributions[idx] = torch.zeros(cgpc_quantizers[idx].n_embed).to(c.device)
+        pattern_quantize_distributions[idx] = torch.zeros(cspc_quantizers[idx].n_embed).to(c.device)
         h = pool_layer(h)
         B, _, H, W = h.shape
         pe = positionalencoding2d(c_pos_cond, H, W).to(c.device).unsqueeze(0).repeat(B, 1, 1, 1)
         _h = feature_mlps[idx](h)
         _h = upsamplers[idx](reduced_semantic_embedding) + _h
-        if c.quantize_enable and cgpc_quantizers is not None:
+        if c.quantize_enable and cspc_quantizers is not None:
             cond_prototype = conceptual_prototype.unsqueeze(-1).unsqueeze(-1).repeat(1, 1, H, W)
-            if c.quantize_type == 'residual':
-                #! residual quantize
-                pos_prototype = torch.cat([pe, cond_prototype], dim=1) if c.concat_pos else cond_prototype
-                residual = _h - pos_prototype
-                residual, _diff_cond, emb_ind = cgpc_quantizers[idx](residual)
-                _h = pos_prototype + residual
-            else:
-                #* indenpendent quantize
+            if c.no_pattern_quantize:
                 _h = torch.cat([_h, pe], dim=1) if c.concat_pos else _h
-                _h, _diff_cond, emb_ind = cgpc_quantizers[idx](_h)
-            diff_cond += _diff_cond.mean()
-            if c.quantize_enable:
-                pattern_quantize_distributions[idx] += torch.bincount(emb_ind.reshape(-1), minlength=cgpc_quantizers[idx].n_embed)
-        if c.concat_cpc:
-            parallel_cond = torch.cat([_h, cond_prototype], dim=1)
-        else:
-            parallel_cond = _h              
+            else:
+                if c.quantize_type == 'residual':
+                    #! residual quantize
+                    pos_prototype = torch.cat([pe, cond_prototype], dim=1) if c.concat_pos else cond_prototype
+                    residual = _h - pos_prototype
+                    residual, _diff_cond, emb_ind = cspc_quantizers[idx](residual)
+                    _h = pos_prototype + residual
+                else:
+                    #* indenpendent quantize
+                    _h = torch.cat([_h, pe], dim=1) if c.concat_pos else _h
+                    _h, _diff_cond, emb_ind = cspc_quantizers[idx](_h)
+                diff_cond += _diff_cond.mean()
+                if c.quantize_enable:
+                    pattern_quantize_distributions[idx] += torch.bincount(emb_ind.reshape(-1), minlength=cspc_quantizers[idx].n_embed)
+        parallel_cond = torch.cat([_h, cond_prototype], dim=1)           
         z, jac = parallel_flow(h, [parallel_cond, ])
         if c.mixed_gaussian:
             if c.quantize_enable:
@@ -102,29 +102,29 @@ def model_forward(c, extractor, models, inputs):
         z_list.append(z)
         parallel_jac_list.append(jac)
 
-    pattern_quantize_distributions[3] = torch.zeros(cgpc_quantizers[-1].n_embed).to(c.device)
+    pattern_quantize_distributions[3] = torch.zeros(cspc_quantizers[-1].n_embed).to(c.device)
     _h_top = feature_mlps[-1](h_top)
     _, _, H, W = _h_top.shape
     pe = positionalencoding2d(c.c_pos_conds[-1], H, W).to(c.device).unsqueeze(0).repeat(B, 1, 1, 1)
-    if c.quantize_enable and cgpc_quantizers is not None:
+    if c.quantize_enable and cspc_quantizers is not None:
         cond_prototype = conceptual_prototype.unsqueeze(-1).unsqueeze(-1).repeat(1, 1, H, W)
-        if c.quantize_type == 'residual':
-            #! residual quantize
-            pos_prototype = torch.cat([pe, cond_prototype], dim=1) if c.concat_pos else cond_prototype
-            residual = _h_top - pos_prototype
-            residual, _diff_cond, emb_ind = cgpc_quantizers[-1](residual)
-            _h_top = pos_prototype + residual
-        else:
-            #* indenpendent quantize
+        if c.no_pattern_quantize:
             _h_top = torch.cat([_h_top, pe], dim=1) if c.concat_pos else _h_top
-            _h_top, _diff_cond, emb_ind = cgpc_quantizers[-1](_h_top)
-        diff_cond += _diff_cond.mean()
-        if c.quantize_enable:
-            pattern_quantize_distributions[3] += torch.bincount(emb_ind.reshape(-1), minlength=cgpc_quantizers[3].n_embed)
-    if c.concat_cpc:
-        fusion_cond = torch.cat([_h_top, cond_prototype], dim=1)
-    else:
-        fusion_cond = _h_top
+        else:
+            if c.quantize_type == 'residual':
+                #! residual quantize
+                pos_prototype = torch.cat([pe, cond_prototype], dim=1) if c.concat_pos else cond_prototype
+                residual = _h_top - pos_prototype
+                residual, _diff_cond, emb_ind = cspc_quantizers[-1](residual)
+                _h_top = pos_prototype + residual
+            else:
+                #* indenpendent quantize
+                _h_top = torch.cat([_h_top, pe], dim=1) if c.concat_pos else _h_top
+                _h_top, _diff_cond, emb_ind = cspc_quantizers[-1](_h_top)
+            diff_cond += _diff_cond.mean()
+            if c.quantize_enable:
+                pattern_quantize_distributions[3] += torch.bincount(emb_ind.reshape(-1), minlength=cspc_quantizers[3].n_embed)
+    fusion_cond = torch.cat([_h_top, cond_prototype], dim=1)
     z_list, fuse_jac = fusion_flow(z_list, fusion_cond)
     jac = fuse_jac + sum(parallel_jac_list)
     
@@ -135,7 +135,7 @@ def train_meta_epoch(c, epoch, loader, extractor, models, params, optimizer, war
 
     for sub_epoch in range(c.sub_epochs):
         epoch_prototype_quantize_distribution = torch.zeros(c.k_cpc).to(c.device)
-        epoch_pattern_quantize_distributions = [torch.zeros(quantize.n_embed).to(c.device) for quantize in models['cgpc_quantizers']]
+        epoch_pattern_quantize_distributions = [torch.zeros(quantize.n_embed).to(c.device) for quantize in models['cspc_quantizers']]
         epoch_loss = 0.
         image_count = 0
         for idx, data in enumerate(loader):
@@ -147,7 +147,7 @@ def train_meta_epoch(c, epoch, loader, extractor, models, params, optimizer, war
             optimizer.zero_grad()
             if scaler:
                 with autocast():
-                    z_list, jac, diff = model_forward(c, extractor, models, inputs)
+                    z_list, jac, diff = model_forward(c, extractor, models, inputs, mode='train')
                     loss = 0.
                     for z in z_list:
                         loss += 0.5 * torch.sum(z**2, (1, 2, 3))
@@ -195,13 +195,14 @@ def train_meta_epoch(c, epoch, loader, extractor, models, params, optimizer, war
         if epoch_prototype_quantize_distribution.sum() != 0:
             _epoch_prototype_quantize_distribution = epoch_prototype_quantize_distribution / epoch_prototype_quantize_distribution.sum()
             print('Dynamic Quantize Distribution:', '({})'.format(len(_epoch_prototype_quantize_distribution)), ''.join([levels[int(x*7)] for x in _epoch_prototype_quantize_distribution]))
-            for i, pattern_quantize_distribution in enumerate(epoch_pattern_quantize_distributions):
+        for i, pattern_quantize_distribution in enumerate(epoch_pattern_quantize_distributions):
+            if pattern_quantize_distribution.sum() != 0:
                 _pattern_quantize_distribution = pattern_quantize_distribution / pattern_quantize_distribution.sum()
                 print('Cond Quantize Distribution {} ({}):'.format(i, len(_pattern_quantize_distribution)), ''.join([levels[int(x*7)] for x in _pattern_quantize_distribution]))
     if c.reassign_quantize:
         models['cpc_quantizer'].reAssign(epoch_prototype_quantize_distribution)
         for i, pattern_quantize_distribution in enumerate(epoch_pattern_quantize_distributions):
-            models['cgpc_quantizers'][i].reAssign(pattern_quantize_distribution)
+            models['cspc_quantizers'][i].reAssign(pattern_quantize_distribution)
         
 
 def inference_meta_epoch(c, epoch, loader, extractor, models):
@@ -225,7 +226,7 @@ def inference_meta_epoch(c, epoch, loader, extractor, models):
             gt_mask_list.extend(t2np(mask))
 
             z_list, jac, diff, prototype_quantize_distribution, pattern_quantize_distributions \
-                    = model_forward(c, extractor, models, inputs)
+                    = model_forward(c, extractor, models, inputs, mode='test')
 
             loss = 0.
             for lvl, z in enumerate(z_list):
@@ -259,16 +260,23 @@ def train(c):
             name='multi_class' if c.multi_class else c.class_name)
         
     if c.dataset == 'mvtec':
-        Dataset = MVTecFeatureDataset if c.pre_extract else MVTecDataset
+        if c.pre_extract:
+            Dataset = MVTecFeatureDataset
+            testDataset = MVTecDataset
+        else:
+            Dataset = MVTecDataset
+            testDataset = MVTecDataset
+        
     if c.dataset == 'visa':
         Dataset = VisADataset
+        testDataset = VisADataset
 
     if c.multi_class:
         train_dataset = MultiClassDataset(c, is_train=True)
         test_datasets = {}
         for class_name in c.class_names:
             setattr(c, 'class_name', class_name)
-            test_datasets[class_name] = Dataset(c, is_train=False)
+            test_datasets[class_name] = testDataset(c, is_train=False)
         train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=c.batch_size, shuffle=True, num_workers=c.workers, pin_memory=True, drop_last=True)
         test_loaders = {k: torch.utils.data.DataLoader(v, batch_size=c.batch_size, shuffle=False, num_workers=c.workers, pin_memory=True) for k, v in test_datasets.items()}
     else:
@@ -281,38 +289,44 @@ def train(c):
     extractor = extractor.to(c.device).eval()
 
     semantic_mlp = nn.Sequential(
-        nn.Linear(output_channels[-1], c.dim_cpc//2),
-        nn.BatchNorm1d(c.dim_cpc//2),
+        nn.Linear(output_channels[-1], c.dim_cpc),
+        nn.BatchNorm1d(c.dim_cpc),
         nn.ReLU(True),
-        nn.Linear(c.dim_cpc//2, c.dim_cpc),
+        nn.Linear(c.dim_cpc, c.dim_cpc),
         nn.BatchNorm1d(c.dim_cpc),
         nn.ReLU(True)
     ).to(c.device)
 
     cpc_quantizer = Quantize(c.dim_cpc, c.k_cpc, thresh=1e-4).to(c.device)
 
-    dim_cgpc = c.dim_cpc
-    if c.concat_pos:
-        dim_cgpc += c.c_pos_conds[0]
+    dim_cspc = c.dim_cpc
+    if c.concat_pos and c.quantize_type == 'residual':
+        dim_cspc += c.c_pos_conds[0]
     
     feature_mlps = nn.ModuleList([
         nn.Sequential(
-            nn.Conv2d(output_channel, dim_cgpc // 2, 1, 1, 0),
-            nn.BatchNorm2d(dim_cgpc // 2),
+            nn.Conv2d(output_channel, dim_cspc, 1, 1, 0),
+            nn.BatchNorm2d(dim_cspc),
             nn.ReLU(True),
-            nn.Conv2d(dim_cgpc // 2, dim_cgpc, 1, 1, 0),
-            nn.BatchNorm2d(dim_cgpc),
+            nn.Conv2d(dim_cspc, dim_cspc, 1, 1, 0),
+            nn.BatchNorm2d(dim_cspc),
             nn.ReLU(True),
         ).to(c.device)
         for output_channel in output_channels
     ])
 
-    cgpc_quantizers = nn.ModuleList([
-        Quantize(dim_cgpc, c.k_cgpc, thresh=1e-6).to(c.device) for k in range(4)
+    if c.concat_pos and c.quantize_type == 'naive':
+        dim_cspc += c.c_pos_conds[0]
+
+    cspc_quantizers = nn.ModuleList([
+        Quantize(dim_cspc, c.k_cspc, thresh=1e-6).to(c.device) for k in range(4)
     ])
 
     for i in range(len(c.c_conds)):
-        c.c_conds[i] = dim_cgpc + c.dim_cpc if c.concat_cpc else dim_cgpc
+        c.c_conds[i] = dim_cspc + c.dim_cpc
+    
+    if c.concat_pos and c.quantize_type == 'naive':
+        dim_cspc -= c.c_pos_conds[0]
 
     class sigma_mu_generator(nn.Module):
 
@@ -335,8 +349,8 @@ def train(c):
     fusion_flow = fusion_flow.to(c.device)
 
     semantic_encoder = nn.Sequential(
-        nn.Conv2d(output_channels[-1], dim_cgpc // 2, 1, 1, 0),
-        nn.BatchNorm2d(dim_cgpc // 2),
+        nn.Conv2d(output_channels[-1], dim_cspc, 1, 1, 0),
+        nn.BatchNorm2d(dim_cspc),
         nn.ReLU(True),
     ).to(c.device)
 
@@ -344,7 +358,7 @@ def train(c):
         nn.Sequential(
             nn.Upsample(
                 scale_factor=2**k, mode='bilinear', align_corners=False),
-            nn.Conv2d(dim_cgpc // 2, dim_cgpc, 1, 1, 0),
+            nn.Conv2d(dim_cspc, dim_cspc, 1, 1, 0),
         ).to(c.device)
         for k in range(len(c.c_conds))
     ])[::-1]   
@@ -356,7 +370,7 @@ def train(c):
             'semantic_mlp': semantic_mlp,
             'upsamplers': upsamplers,
             'feature_mlps': feature_mlps, 
-            'cgpc_quantizers': cgpc_quantizers, 
+            'cspc_quantizers': cspc_quantizers, 
             'cpc_quantizer': cpc_quantizer,
             'sigma_mu_generators': sigma_mu_generators
         })

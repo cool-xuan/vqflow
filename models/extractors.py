@@ -24,8 +24,7 @@ def build_extractor(c):
         extractor = timm.create_model('convnext_xlarge_384_in22ft1k', pretrained=True, features_only=True)
     elif c.extractor == 'convnextv2_base':
         print('convnextv2_base picked')
-        extractor = timm.create_model('convnextv2_base', pretrained=True, features_only=True, pretrained_cfg_overlay=dict(
-                                                     file='convnextv2_base_22k_384_ema.pt'))
+        extractor = timm.create_model('convnextv2_base', pretrained=True, features_only=True)
     
     output_channels = []
     if 'wide' in c.extractor:
