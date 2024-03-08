@@ -117,18 +117,18 @@ CUDA_VISIBLE_DEVICES=0 python main.py --mode test --dataset mvtec --class-names 
 
 | Classes             | Det. AUROC | Loc. AUROC |
 | ------------------- | :--------: | :--------: |
-| candle              |    98.3    |    99.2    |
-| capsules            |    96.6    |    99.5    |
-| cashew              |    96.8    |    99.4    |
+| candle              |    98.0    |    99.2    |
+| capsules            |    96.0    |    99.5    |
+| cashew              |    95.5    |    99.4    |
 | chewinggum          |    99.7    |    99.1    |
-| fryum               |    98.8    |    96.1    |
-| macaroni1           |    94.4    |    99.2    |
-| macaroni2           |    84.4    |    98.8    |
+| fryum               |    98.6    |    96.1    |
+| macaroni1           |    94.3    |    99.2    |
+| macaroni2           |    83.9    |    98.8    |
 | pcb1                |    95.3    |    99.6    |
 | pcb2                |    96.2    |    98.6    |
-| pcb3                |    94.9    |    98.9    |
+| pcb3                |    94.7    |    98.9    |
 | pcb4                |    99.3    |    98.9    |
-| pipe_fryum          |    99.2    |    99.1    |
+| pipe_fryum          |    99.0    |    99.1    |
 | **Overall Average** |  **95.9**  |  **98.9**  |
 
 
