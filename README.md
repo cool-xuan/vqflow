@@ -135,5 +135,6 @@ CUDA_VISIBLE_DEVICES=0 python main.py --mode test --dataset mvtec --class-names 
 ## Thanks to
 
 - [FrEIA](https://github.com/VLL-HD/FrEIA)
-- [vqflow](https://github.com/cool-xuan/vqflow)
+- [msflow](https://github.com/cool-xuan/msflow)
+- [vqvae](https://github.com/rosinality/vq-vae-2-pytorch)
 - [spot-diff](https://github.com/amazon-science/spot-diff/tree/main)
