@@ -11,7 +11,7 @@ from torch.cuda.amp import autocast, GradScaler
 
 from datasets import MVTecDataset, MVTecFeatureDataset, VisADataset, MultiClassDataset
 from models.extractors import build_extractor
-from models.flow_models import build_msflow_model
+from models.flow_models import build_vqflow_model
 from post_process import post_process
 from utils import Score_Observer, t2np, positionalencoding2d, save_weights, load_weights
 from evaluations import eval_det_loc
@@ -255,7 +255,7 @@ def train(c):
     if c.wandb_enable:
         wandb.finish()
         wandb.init(
-            project='65001-msflow', 
+            project='vqflow', 
             group=c.version_name,
             name='multi_class' if c.multi_class else c.class_name)
         
@@ -344,7 +344,7 @@ def train(c):
         sigma_mu_generator(c.dim_cpc, out_channel).to(c.device) for out_channel in output_channels[:-1]
     ])
 
-    parallel_flows, fusion_flow = build_msflow_model(c, output_channels)
+    parallel_flows, fusion_flow = build_vqflow_model(c, output_channels)
     parallel_flows = nn.ModuleList(parallel_flows).to(c.device)
     fusion_flow = fusion_flow.to(c.device)
 

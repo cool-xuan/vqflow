@@ -2,6 +2,7 @@
 
 # Ignore binary files
 *.pyc
+*.ipynb
 
 # workspace files are local
 work_dirs

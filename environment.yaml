@@ -1,4 +1,4 @@
-name: msflow
+name: vqflow
 channels:
   - pytorch
   - nvidia

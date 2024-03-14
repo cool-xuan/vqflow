@@ -184,7 +184,7 @@ def single_parallel_flows(c_feat, c_cond, n_block, n_cond_block, clamp_alpha, su
             global_affine_type='SOFTPLUS')
     return flows
 
-def build_msflow_model(c, c_feats):
+def build_vqflow_model(c, c_feats):
     c_conds = c.c_conds
     n_blocks = c.parallel_blocks
     n_cond_blocks = c.condition_blocks

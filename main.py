@@ -23,7 +23,7 @@ def init_seeds(seed=9826):
 #     torch.backends.cudnn.enabled = False
 
 def parsing_args(c):
-    parser = argparse.ArgumentParser(description='msflow')
+    parser = argparse.ArgumentParser(description='vqflow')
     parser.add_argument('--dataset', default='mvtec', type=str, 
                         choices=['mvtec', 'visa'], help='dataset name')
     parser.add_argument('--input-size', default=384, type=int)
